@@ -1,12 +1,26 @@
 # window-toggle
 
-A lightweight X11 utility for GNOME that allows you to toggle window visibility with a keyboard shortcut.
+A keyboard shortcut utility for GNOME that lets you instantly show or hide any window with a single key press.
 
-## Features
+## What is this?
 
-- **Quick Toggle**: Press a hotkey to show/hide any window
-- **Interactive Configuration**: Easy setup with `--configure` mode
-- **GNOME Integration**: Automatically registers custom keybindings
+Ever wanted to hide a distracting window with one key press and bring it back just as quickly? **window-toggle** gives you a keyboard shortcut for each window, so you can:
+
+- Hide a terminal or browser that's in your way
+- Bring it back instantly with the same shortcut
+- Works like "hide app" on macOS, but per-window
+
+## Use Case
+
+```
+You have 3 terminals open on different workspaces.
+You assign Ctrl+Alt+F1 to terminal 1, F2 to terminal 2, F3 to terminal 3.
+
+Now you can:
+- Press Ctrl+Alt+F1 → terminal 1 appears (was hidden)
+- Press Ctrl+Alt+F1 → terminal 1 minimizes (was visible)
+- Repeat anywhere in GNOME
+```
 
 ## Installation
 
@@ -19,65 +33,51 @@ meson compile -C build
 gcc -Wall -O2 -o window-toggle window-toggle.c config.c window-manager.c -lX11 -lxkbcommon
 ```
 
-## Usage
+## Quick Start
 
-### Configure a Shortcut
+### 1. Configure a window
 
 ```bash
 ./window-toggle --configure
 ```
 
-This interactive mode will:
-1. Prompt you to press a keyboard shortcut (e.g., `Ctrl+Alt+F1`)
-2. Let you select a window from the list
-3. Register the shortcut in GNOME automatically
+The program will:
+1. Ask you to press a key combination (e.g., `Ctrl+Alt+F1`)
+2. Show a list of open windows - select one
+3. Automatically register the shortcut in GNOME
 
-### Toggle Window
+### 2. Use it
 
-After configuration, press your assigned shortcut (e.g., `Ctrl+Alt+F1`) to toggle the window:
+Press `Ctrl+Alt+F1` anywhere in GNOME:
+- **Window hidden?** → It appears on screen
+- **Window visible?** → It minimizes
 
-- If hidden → activates and shows the window
-- If visible → minimizes the window
+### 3. Check shortcuts
 
-Or run manually:
-```bash
-./window-toggle --run --key F1
-```
-
-### Other Commands
-
-```bash
-# Show current configuration
-./window-toggle --show
-
-# Remove all configurations
-./window-toggle --clean
-
-# Start fresh (clean conflicting shortcuts)
-./window-toggle --start
-```
-
-## Keyboard Shortcuts
-
-After running `--configure` and setting up a shortcut (e.g., `Ctrl+Alt+F1`):
-
-1. The shortcut is automatically registered in GNOME's keyboard settings
-2. Press `Ctrl+Alt+F1` anywhere to toggle the window:
-   - **Hidden window** → Press shortcut → Window appears
-   - **Visible window** → Press shortcut → Window minimizes
-
-You can view all configured shortcuts with:
 ```bash
 ./window-toggle --show
 ```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `--configure` | Add a new shortcut for a window |
+| `--run` | Toggle window (used by GNOME shortcut) |
+| `--show` | List all configured shortcuts |
+| `--clean` | Remove all shortcuts |
+| `--start` | Clean and start fresh |
 
 ## How It Works
 
-- Hidden window → activates and raises it
-- Visible window → minimizes it
+- Uses X11 `_NET_WM_STATE_HIDDEN` to detect window state
+- Sends `_NET_ACTIVE_WINDOW` to show, `XIconifyWindow` to hide
+- Stores config in `/tmp/window-toggle-config.json`
+- Registers shortcuts via GNOME's `dconf` settings
 
-## Dependencies
+## Requirements
 
+- GNOME Desktop (for keyboard shortcuts)
 - libX11
 - xkbcommon
 - GCC
