@@ -1,0 +1,3 @@
+# Meson options for window-toggle
+
+# Note: 'prefix' is a built-in option, don't redefine it

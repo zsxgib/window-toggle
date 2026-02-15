@@ -1,0 +1,5 @@
+*.o
+window-toggle
+window-toggle-daemon
+test-keyboard
+build/
