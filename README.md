@@ -24,13 +24,33 @@ Now you can:
 
 ## Installation
 
+### Option 1: Install to system (recommended)
+
+```bash
+# Build and install to /usr/local/bin/
+meson setup build
+meson install -C build
+
+# Now you can run from anywhere
+window-toggle --configure
+```
+
+### Option 2: Build without installing
+
 ```bash
 # Build with meson
 meson setup build
 meson compile -C build
 
-# Or build with gcc
+# Run from project directory
+./build/window-toggle --configure
+```
+
+### Option 3: Build with gcc
+
+```bash
 gcc -Wall -O2 -o window-toggle window-toggle.c config.c window-manager.c -lX11 -lxkbcommon
+./window-toggle --configure
 ```
 
 ## Quick Start
