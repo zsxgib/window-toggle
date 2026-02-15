@@ -81,6 +81,11 @@ window-toggle --show
 - libX11
 - xkbcommon
 - GCC
+- meson, ninja（编译用）
+
+## 测试环境
+
+- Ubuntu 24.04 with GNOME
 
 ## 许可证
 
