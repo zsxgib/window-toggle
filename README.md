@@ -81,6 +81,11 @@ Press `Ctrl+Alt+F1` anywhere in GNOME:
 - libX11
 - xkbcommon
 - GCC
+- meson, ninja (for building)
+
+## Tested On
+
+- Ubuntu 24.04 with GNOME
 
 ## License
 
