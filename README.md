@@ -57,6 +57,20 @@ Or run manually:
 ./window-toggle --start
 ```
 
+## Keyboard Shortcuts
+
+After running `--configure` and setting up a shortcut (e.g., `Ctrl+Alt+F1`):
+
+1. The shortcut is automatically registered in GNOME's keyboard settings
+2. Press `Ctrl+Alt+F1` anywhere to toggle the window:
+   - **Hidden window** → Press shortcut → Window appears
+   - **Visible window** → Press shortcut → Window minimizes
+
+You can view all configured shortcuts with:
+```bash
+./window-toggle --show
+```
+
 ## How It Works
 
 - Hidden window → activates and raises it
