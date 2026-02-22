@@ -24,13 +24,37 @@ Now you can:
 
 ## Installation
 
-```bash
-# Build and install to /usr/local/bin/
-meson setup build
-meson install -C build
+### Build and Install
 
-# Now you can run from anywhere
+```bash
+# Setup build directory (only needed once)
+meson setup build
+
+# Compile the project
+meson compile -C build
+
+# Install to system (requires sudo)
+sudo meson install -C build
+```
+
+After installation, run from anywhere:
+```bash
 window-toggle --configure
+```
+
+### Re-build after code changes
+
+If you modify the source code and want to re-install:
+
+```bash
+# Recompile and install
+meson compile -C build && sudo meson install -C build
+```
+
+Or in two steps:
+```bash
+meson compile -C build
+sudo meson install -C build
 ```
 
 ## Quick Start

@@ -24,13 +24,37 @@
 
 ## 安装
 
-```bash
-# 编译并安装到 /usr/local/bin/
-meson setup build
-meson install -C build
+### 编译并安装
 
-# 之后可以在任意目录运行
+```bash
+# 设置构建目录（只需一次）
+meson setup build
+
+# 编译项目
+meson compile -C build
+
+# 安装到系统（需要 sudo）
+sudo meson install -C build
+```
+
+安装后即可使用：
+```bash
 window-toggle --configure
+```
+
+### 修改代码后重新安装
+
+如果你修改了源代码并想重新安装：
+
+```bash
+# 编译并安装
+meson compile -C build && sudo meson install -C build
+```
+
+或分两步：
+```bash
+meson compile -C build
+sudo meson install -C build
 ```
 
 ## 快速开始
