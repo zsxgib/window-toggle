@@ -111,6 +111,22 @@ Press `Ctrl+Alt+F1` anywhere in GNOME:
 
 - Ubuntu 24.04 with GNOME
 
+## Changelog
+
+### v1.3 (2026-02-22)
+- Fix config file format corruption when saving shortcuts
+- Fix newline preservation in config file
+- Support multiple independent shortcuts (F1, F2, etc.)
+- Support shortcut override (reconfigure same key to different window)
+- Add slot_id to config file for better tracking
+
+### v1.1 (2026-01-11)
+- Add duplicate shortcut override support
+
+### v1.0 (2026-01-08)
+- Initial release show
+- Basic/hide window toggle functionality
+
 ## License
 
 MIT
