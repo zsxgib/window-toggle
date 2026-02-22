@@ -162,24 +162,33 @@ void save_shortcut_mapping(const char *path, const char *shortcut, Window window
         }
 
         char line[512];
-        int found_duplicate = 0;
+        int in_duplicate_block = 0;
 
         while (fgets(line, sizeof(line), old_fp)) {
-            /* Check if this line contains the same shortcut */
-            char shortcut_buf[128];
-            char *colon_pos = strchr(line, ':');
-            if (colon_pos) {
-                size_t shortcut_len = colon_pos - line;
-                if (shortcut_len < sizeof(shortcut_buf)) {
-                    strncpy(shortcut_buf, line, shortcut_len);
-                    shortcut_buf[shortcut_len] = '\0';
+            /* Check if this line starts a new block */
+            if (strncmp(line, "modifiers:", 10) == 0) {
+                in_duplicate_block = 0;
+            }
 
-                    /* If this shortcut matches, skip it (will be replaced) */
-                    if (strcmp(shortcut_buf, shortcut) == 0) {
-                        found_duplicate = 1;
-                        continue;
-                    }
+            /* Check if this line contains the key we're looking for */
+            if (strncmp(line, "key:", 4) == 0) {
+                char *p = line + 4;
+                while (*p == ' ' || *p == '\t') p++;
+                p[strcspn(p, "\r\n")] = 0;
+                /* If this key matches, skip this entire block */
+                if (strcmp(p, key) == 0) {
+                    in_duplicate_block = 1;
+                    continue;
                 }
+            }
+
+            /* Skip lines in duplicate block */
+            if (in_duplicate_block) {
+                /* Check if this is an empty line (end of block) */
+                if (line[0] == '\n' || line[0] == '\r') {
+                    in_duplicate_block = 0;
+                }
+                continue;
             }
 
             /* Keep all other lines */
@@ -197,6 +206,7 @@ void save_shortcut_mapping(const char *path, const char *shortcut, Window window
             fprintf(fp, "window_id: 0x%lx\n", window_id);
             fprintf(fp, "window_title: %s\n", window_title);
             fprintf(fp, "window_class: %s\n", window_class);
+            fprintf(fp, "slot_id: %d\n", slot_id);
             fprintf(fp, "\n");  /* Add blank line between entries */
             fclose(fp);
         }
@@ -212,6 +222,7 @@ void save_shortcut_mapping(const char *path, const char *shortcut, Window window
         fprintf(fp, "window_id: 0x%lx\n", window_id);
         fprintf(fp, "window_title: %s\n", window_title);
         fprintf(fp, "window_class: %s\n", window_class);
+        fprintf(fp, "slot_id: %d\n", slot_id);
         fclose(fp);
     }
 }

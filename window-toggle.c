@@ -460,6 +460,58 @@ void configure_mode_with_path(const char *config_path) {
     }
     /* Find the next slot ID - always allocate new slot */
     int next_id = find_next_slot_id(config_path);
+
+    /* Check if this shortcut already exists in config file - clean old slot if exists */
+    FILE *config_fp = fopen(config_path, "r");
+    if (config_fp) {
+        char line[512];
+        char old_shortcut[64] = "";
+        int old_slot_id = -1;
+
+        while (fgets(line, sizeof(line), config_fp)) {
+            /* Look for shortcut line */
+            if (strncmp(line, "key:", 4) == 0) {
+                char *p = line + 4;
+                while (*p == ' ' || *p == '\t') p++;
+                p[strcspn(p, "\r\n")] = 0;
+                strncpy(old_shortcut, p, sizeof(old_shortcut) - 1);
+            }
+            /* Look for slot_id line */
+            if (strncmp(line, "slot_id:", 8) == 0 && strlen(old_shortcut) > 0) {
+                char *p = line + 8;
+                while (*p == ' ' || *p == '\t') p++;
+                old_slot_id = atoi(p);
+
+                /* Check if shortcut matches */
+                if (strcmp(old_shortcut, selected_key) == 0 && old_slot_id >= 0) {
+                    fprintf(stderr, COLOR_YELLOW "Found existing shortcut '%s' at slot custom%d, cleaning..." COLOR_RESET "\n", old_shortcut, old_slot_id);
+
+                    /* Clean old slot from dconf */
+                    char clean_cmd[512];
+                    snprintf(clean_cmd, sizeof(clean_cmd),
+                             "dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/ 2>/dev/null",
+                             old_slot_id);
+                    system(clean_cmd);
+
+                    /* Remove old slot from list */
+                    char list_clean[1024];
+                    snprintf(list_clean, sizeof(list_clean),
+                             "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings 2>/dev/null | sed \"s|'/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/'||g; s|,, |, |g; s|\\[, |[|g; s|, ]|]|g\" | xargs -0 -I{} dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings \"{}\" 2>/dev/null",
+                             old_slot_id);
+                    system(list_clean);
+
+                    /* Use the old slot ID instead of new one */
+                    next_id = old_slot_id;
+                    fprintf(stderr, COLOR_GREEN "Old slot cleaned, reusing custom%d" COLOR_RESET "\n", next_id);
+                    break;
+                }
+                old_shortcut[0] = 0;
+                old_slot_id = -1;
+            }
+        }
+        fclose(config_fp);
+    }
+
     fprintf(stderr, COLOR_YELLOW "Using shortcut slot:" COLOR_RESET " custom%d\n", next_id);
     /* Now set up the new shortcut */
     char command[4096];
@@ -1079,6 +1131,91 @@ void clean_mode_with_path(const char *config_path) {
         fprintf(stderr, COLOR_YELLOW "No window-toggle shortcuts found." COLOR_RESET "\n");
     } else {
         fprintf(stderr, COLOR_GREEN "\n✓ Cleaned %d window-toggle shortcut(s)" COLOR_RESET "\n", cleaned_count);
+    }
+
+    /* Step 2: Clean up empty custom slots */
+    fprintf(stderr, COLOR_YELLOW "\nCleaning up empty custom slots..." COLOR_RESET "\n");
+    int empty_count = 0;
+    for (int i = 0; i < 100; i++) {
+        char binding_cmd[512];
+        char name_cmd[512];
+        snprintf(binding_cmd, sizeof(binding_cmd),
+                 "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/binding 2>/dev/null",
+                 i);
+        snprintf(name_cmd, sizeof(name_cmd),
+                 "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/name 2>/dev/null",
+                 i);
+
+        /* Check if binding is empty or doesn't exist */
+        FILE *fp_binding = popen(binding_cmd, "r");
+        char binding[256] = {0};
+        if (fp_binding) {
+            if (fgets(binding, sizeof(binding), fp_binding)) {
+                /* Remove quotes and whitespace */
+                binding[strcspn(binding, "\r\n")] = 0;
+            }
+            pclose(fp_binding);
+        }
+
+        /* Check if name is empty or doesn't exist */
+        FILE *fp_name = popen(name_cmd, "r");
+        char name[256] = {0};
+        if (fp_name) {
+            if (fgets(name, sizeof(name), fp_name)) {
+                name[strcspn(name, "\r\n")] = 0;
+            }
+            pclose(fp_name);
+        }
+
+        /* If both binding and name are empty, remove from list */
+        char binding_stripped[256] = {0};
+        char name_stripped[256] = {0};
+        if (strlen(binding) > 0) {
+            snprintf(binding_stripped, sizeof(binding_stripped), "%s", binding);
+            char *p = binding_stripped;
+            while (*p == '\'' || *p == ' ' || *p == '\t') p++;
+            memmove(binding_stripped, p, strlen(p) + 1);
+            p = binding_stripped + strlen(binding_stripped) - 1;
+            while (p > binding_stripped && (*p == '\'' || *p == ' ' || *p == '\t')) *p-- = 0;
+        }
+
+        if (strlen(name) > 0) {
+            snprintf(name_stripped, sizeof(name_stripped), "%s", name);
+            char *p = name_stripped;
+            while (*p == '\'' || *p == ' ' || *p == '\t') p++;
+            memmove(name_stripped, p, strlen(p) + 1);
+            p = name_stripped + strlen(name_stripped) - 1;
+            while (p > name_stripped && (*p == '\'' || *p == ' ' || *p == '\t')) *p-- = 0;
+        }
+
+        int binding_empty = (strlen(binding_stripped) == 0);
+        int name_empty = (strlen(name_stripped) == 0);
+
+        if (binding_empty && name_empty) {
+            /* Slot is empty, remove from list */
+            char slot_path[256];
+            snprintf(slot_path, sizeof(slot_path),
+                     "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/", i);
+
+            char list_cmd[1024];
+            snprintf(list_cmd, sizeof(list_cmd),
+                     "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings 2>/dev/null | sed \"s|'%s'||g; s|,, |, |g; s|\\[, |[|g; s|, ]|]|g\" | xargs -0 -I{} dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings \"{}\" 2>/dev/null",
+                     slot_path);
+            system(list_cmd);
+
+            /* Also reset the slot */
+            char reset_cmd[256];
+            snprintf(reset_cmd, sizeof(reset_cmd),
+                     "dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/ 2>/dev/null",
+                     i);
+            system(reset_cmd);
+
+            empty_count++;
+        }
+    }
+
+    if (empty_count > 0) {
+        fprintf(stderr, COLOR_GREEN "✓ Removed %d empty custom slot(s)" COLOR_RESET "\n", empty_count);
     }
 
     /* Also remove the configuration file content */
