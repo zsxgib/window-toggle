@@ -165,17 +165,22 @@ void save_shortcut_mapping(const char *path, const char *shortcut, Window window
         int in_duplicate_block = 0;
 
         while (fgets(line, sizeof(line), old_fp)) {
-            /* Check if this line starts a new block */
-            if (strncmp(line, "modifiers:", 10) == 0) {
-                in_duplicate_block = 0;
+            /* Check for empty line - end of block */
+            if (line[0] == '\n' || line[0] == '\r') {
+                if (in_duplicate_block) {
+                    in_duplicate_block = 0;
+                    continue;
+                }
+                fputs(line, new_fp);
+                continue;
             }
 
-            /* Check if this line contains the key we're looking for */
+            /* Check for "key:" line and extract the value */
             if (strncmp(line, "key:", 4) == 0) {
                 char *p = line + 4;
                 while (*p == ' ' || *p == '\t') p++;
                 p[strcspn(p, "\r\n")] = 0;
-                /* If this key matches, skip this entire block */
+                /* If key value matches, skip this entire block */
                 if (strcmp(p, key) == 0) {
                     in_duplicate_block = 1;
                     continue;
@@ -184,15 +189,17 @@ void save_shortcut_mapping(const char *path, const char *shortcut, Window window
 
             /* Skip lines in duplicate block */
             if (in_duplicate_block) {
-                /* Check if this is an empty line (end of block) */
-                if (line[0] == '\n' || line[0] == '\r') {
-                    in_duplicate_block = 0;
-                }
                 continue;
             }
 
-            /* Keep all other lines */
-            fputs(line, new_fp);
+            /* Keep all other lines - add newline if not present */
+            size_t len = strlen(line);
+            if (len > 0 && line[len-1] != '\n') {
+                fputs(line, new_fp);
+                fputc('\n', new_fp);
+            } else {
+                fputs(line, new_fp);
+            }
         }
 
         fclose(old_fp);
