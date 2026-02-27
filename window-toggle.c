@@ -296,16 +296,10 @@ void configure_mode_with_path(const char *config_path) {
             }
         }
         if (should_skip) continue;
-        /* Find if class already exists */
+        /* Find if class already exists (exact match only) */
         int found = -1;
         for (int j = 0; j < app_count; j++) {
             if (strcmp(app_groups[j].class_name, window_info[i].class) == 0) {
-                found = j;
-                break;
-            }
-            /* Smart match for similar class names */
-            if (strstr(app_groups[j].class_name, window_info[i].class) ||
-                strstr(window_info[i].class, app_groups[j].class_name)) {
                 found = j;
                 break;
             }
@@ -322,13 +316,6 @@ void configure_mode_with_path(const char *config_path) {
             /* Existing app class, add window to it */
             app_groups[found].windows[app_groups[found].window_count] = &window_info[i];
             app_groups[found].window_count++;
-            /* Update class name to the shorter/more general one if smart matched */
-            if (strcmp(app_groups[found].class_name, window_info[i].class) != 0) {
-                if (strlen(window_info[i].class) < strlen(app_groups[found].class_name)) {
-                    free(app_groups[found].class_name);
-                    app_groups[found].class_name = strdup(window_info[i].class);
-                }
-            }
         }
     }
     /* Display grouped windows */
@@ -350,7 +337,7 @@ void configure_mode_with_path(const char *config_path) {
         } else {
             color = COLOR_YELLOW;
         }
-        fprintf(stderr, "\n" COLOR_BOLD "%s" COLOR_RESET " (%d window%s):\n",
+        fprintf(stderr, COLOR_BOLD "%s" COLOR_RESET " (%d window%s):\n",
                 class_name,
                 app_groups[app].window_count,
                 app_groups[app].window_count == 1 ? "" : "s");
