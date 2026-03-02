@@ -458,7 +458,7 @@ void configure_mode_with_path(const char *config_path) {
     if (!fp) {
         fprintf(stderr, COLOR_RED "  Failed to query existing shortcuts\n" COLOR_RESET);
     } else {
-        char buffer[1024];
+        char buffer[8192];
         if (fgets(buffer, sizeof(buffer), fp) == NULL) {
             fprintf(stderr, COLOR_RED "  Could not read shortcuts\n" COLOR_RESET);
             pclose(fp);
@@ -469,7 +469,7 @@ void configure_mode_with_path(const char *config_path) {
             snprintf(custom_path, sizeof(custom_path), "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/", next_id);
 
             /* Handle @as [] (empty array) case */
-            char new_list[2048];
+            char new_list[8192];
             if (strncmp(buffer, "@as []", 6) == 0) {
                 snprintf(new_list, sizeof(new_list), "['%s']", custom_path);
             } else {
