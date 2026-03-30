@@ -615,30 +615,31 @@ void run_mode_with_path(const char *config_path, const char *key_param) {
 }
 /* Find the next available slot ID - skip invalid slots */
 int find_next_slot_id(const char *config_path) {
-    /* Always allocate a new slot ID based on config file count */
-    if (!config_exists(config_path)) {
-        return 0;
-    }
-    /* Count existing shortcuts in config file */
-    FILE *fp = fopen(config_path, "r");
-    if (!fp) {
-        return 0;
-    }
-    int count = 0;
-    char line[512];
-    while (fgets(line, sizeof(line), fp)) {
-        if (line[0] != '\0') {  /* Non-empty line = shortcut */
-            count++;
+    int start = 0;
+
+    /* If config exists, count shortcuts to determine starting point */
+    if (config_exists(config_path)) {
+        FILE *fp = fopen(config_path, "r");
+        if (fp) {
+            int count = 0;
+            char line[512];
+            while (fgets(line, sizeof(line), fp)) {
+                if (line[0] != '\0') {  /* Non-empty line = shortcut */
+                    count++;
+                }
+            }
+            fclose(fp);
+            /* Start from count if config exists */
+            start = count;
         }
     }
-    fclose(fp);
 
-    /* Check if slot exists and has valid configuration */
-    for (int i = count; i < 100; i++) {
-        /* First check if slot is in custom-keybindings list */
+    /* Find first slot not in dconf list, starting from 'start' */
+    for (int i = start; i < 100; i++) {
+        /* First check if slot is in custom-keybindings list (use regex to avoid matching custom51 when searching for custom5) */
         char list_check[512];
         snprintf(list_check, sizeof(list_check),
-                 "gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings | grep -o 'custom%d' | wc -l",
+                 "gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings | grep -oE 'custom%d[^0-9]' | wc -l",
                  i);
         FILE *list_fp = popen(list_check, "r");
         if (list_fp) {
@@ -658,7 +659,7 @@ int find_next_slot_id(const char *config_path) {
         /* Slot not in list, it's available */
         return i;
     }
-    return count;
+    return start;
 }
 void start_mode_with_path(const char *config_path) {
     fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== Window Toggle Start Mode ===" COLOR_RESET "\n");
@@ -1044,12 +1045,26 @@ void clean_mode_with_path(const char *config_path) {
                              i);
                     int result = system(delete_cmd);
 
-                    /* Also remove from the custom-keybindings list */
-                    char list_cmd[1024];
-                    snprintf(list_cmd, sizeof(list_cmd),
-                             "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings 2>/dev/null | sed \"s|'%s'||g; s|,, |, |g; s|\\[, |[|g; s|, ]|]|g\" | xargs -0 -I{} dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings \"{}\" 2>/dev/null",
-                             remove_path);
-                    system(list_cmd);
+                    /* Also remove from the custom-keybindings list using Python script file */
+                    FILE *fp = fopen("/tmp/wt_rm.py", "w");
+                    if (fp) {
+                        fprintf(fp, "#!/usr/bin/env python3\n");
+                        fprintf(fp, "import subprocess, re, sys\n");
+                        fprintf(fp, "slot = %d\n", i);
+                        fprintf(fp, "l = subprocess.run(['dconf', 'read', '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings'], capture_output=True, text=True).stdout.strip()\n");
+                        fprintf(fp, "if l and l != '@as []':\n");
+                        fprintf(fp, "    paths = re.findall(r\"'([^']+)'\", l)\n");
+                        fprintf(fp, "    remove = '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%%d/' %% slot\n");
+                        fprintf(fp, "    new_paths = [p for p in paths if p != remove]\n");
+                        fprintf(fp, "    if new_paths:\n");
+                        fprintf(fp, "        new_list = '[' + ', '.join(\"'\" + p + \"'\" for p in new_paths) + ']'\n");
+                        fprintf(fp, "    else:\n");
+                        fprintf(fp, "        new_list = '@as []'\n");
+                        fprintf(fp, "    subprocess.run(['dconf', 'write', '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings', new_list])\n");
+                        fclose(fp);
+                        system("python3 /tmp/wt_rm.py");
+                        unlink("/tmp/wt_rm.py");
+                    }
 
                     if (result == 0) {
                         fprintf(stderr, COLOR_GREEN "  ✓ Cleaned custom%d: %s" COLOR_RESET "\n", i, name_stripped);
