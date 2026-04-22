@@ -14,6 +14,8 @@
 #include <X11/XKBlib.h>
 #include "config.h"
 #include "window-manager.h"
+#include "daemon.h"
+#include "ipc.h"
 /* Forward declaration */
 void free_config(Config *config);
 static volatile sig_atomic_t grab_timeout = 0;
@@ -580,7 +582,30 @@ void run_mode_with_path(const char *config_path, const char *key_param) {
         target_window = config->target_window;
         fprintf(stderr, "Target window: 0x%lx\n", target_window);
     }
-    /* Check window state */
+
+    /* Try daemon mode first */
+    if (daemon_is_running()) {
+        fprintf(stderr, "Using daemon for window operation...\n");
+        int32_t resp = -1;
+        uint32_t resp_size = sizeof(resp);
+
+        if (daemon_send_request(IPC_TOGGLE_WINDOW, &target_window, sizeof(target_window), &resp, &resp_size)) {
+            if (resp == 0) {
+                fprintf(stderr, COLOR_GREEN "Window toggled via daemon" COLOR_RESET "\n");
+            } else {
+                fprintf(stderr, COLOR_RED "Daemon operation failed" COLOR_RESET "\n");
+            }
+        } else {
+            fprintf(stderr, COLOR_YELLOW "Daemon request failed, falling back to direct X" COLOR_RESET "\n");
+            /* Fall through to direct X mode */
+        }
+
+        if (config) free_config(config);
+        return;
+    }
+
+    /* Fallback: direct X operations (for backward compatibility) */
+    fprintf(stderr, "Daemon not running, using direct X connection...\n");
     Display *display = XOpenDisplay(NULL);
     if (!display) {
         fprintf(stderr, COLOR_RED "Failed to open X display" COLOR_RESET "\n");
@@ -662,71 +687,22 @@ int find_next_slot_id(const char *config_path) {
     return start;
 }
 void start_mode_with_path(const char *config_path) {
-    fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== Window Toggle Start Mode ===" COLOR_RESET "\n");
-    fprintf(stderr, COLOR_YELLOW "Cleaning up conflicting shortcuts..." COLOR_RESET "\n");
-    /* List of slots to clean (conflicting/unnecessary programs) */
-    int slots_to_clean[] = {0, 1, 3};  /* flameshot, app-toggle.sh, firefox-toggle */
-    int num_slots = sizeof(slots_to_clean) / sizeof(slots_to_clean[0]);
-    /* List of slots to keep (important window-toggle configs) */
-    int slots_to_keep[] = {4, 5, 6, 9};  /* terminator1, terminator2, vscode, window-toggle */
-    int num_keep = sizeof(slots_to_keep) / sizeof(slots_to_keep[0]);
-    int cleaned_count = 0;
-    /* Clean conflicting slots */
-    for (int i = 0; i < num_slots; i++) {
-        int slot_id = slots_to_clean[i];
-        /* Check if slot exists and has content */
-        char check_cmd[512];
-        snprintf(check_cmd, sizeof(check_cmd),
-                 "dconf dump /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ | sed -n '/\\[custom%d\\]/,/^$/p' | grep -E 'binding=|command=|name=' | wc -l",
-                 slot_id);
-        FILE *check_fp = popen(check_cmd, "r");
-        if (check_fp) {
-            char count_str[32];
-            if (fgets(count_str, sizeof(count_str), check_fp)) {
-                int count = atoi(count_str);
-                if (count > 0) {
-                    /* Slot has content, clean it */
-                    char command[512];
-                    snprintf(command, sizeof(command),
-                             "dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom%d/",
-                             slot_id);
-                    int result = system(command);
-                    if (result == 0) {
-                        fprintf(stderr, COLOR_GREEN "✓ Cleaned slot %d" COLOR_RESET "\n", slot_id);
-                        cleaned_count++;
-                    } else {
-                        fprintf(stderr, "✗ Failed to clean slot %d\n", slot_id);
-                    }
-                }
-            }
-            pclose(check_fp);
-        }
+    fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== Window Toggle Daemon Mode ===" COLOR_RESET "\n");
+    (void)config_path;  /* unused */
+
+    if (daemon_is_running()) {
+        fprintf(stderr, COLOR_YELLOW "Daemon is already running." COLOR_RESET "\n");
+        daemon_status();
+        return;
     }
-    /* Show kept slots */
-    fprintf(stderr, "\n" COLOR_CYAN "Preserved slots:" COLOR_RESET "\n");
-    for (int i = 0; i < num_keep; i++) {
-        int slot_id = slots_to_keep[i];
-        char check_cmd[512];
-        snprintf(check_cmd, sizeof(check_cmd),
-                 "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom%d/name 2>/dev/null",
-                 slot_id);
-        FILE *check_fp = popen(check_cmd, "r");
-        if (check_fp) {
-            char name[256];
-            if (fgets(name, sizeof(name), check_fp)) {
-                /* Remove newline and quotes */
-                char *p = name;
-                while (*p == ' ' || *p == '\t') p++;
-                if (strlen(p) > 0) {
-                    fprintf(stderr, COLOR_GREEN "✓ Preserved slot %d:" COLOR_RESET " %s", slot_id, p);
-                }
-            }
-            pclose(check_fp);
-        }
+
+    fprintf(stderr, "Starting daemon...\n");
+    int ret = daemon_start();
+    if (ret == 0) {
+        fprintf(stderr, COLOR_GREEN "✓ Daemon started successfully" COLOR_RESET "\n");
+    } else if (ret < 0) {
+        fprintf(stderr, COLOR_RED "✗ Failed to start daemon" COLOR_RESET "\n");
     }
-    fprintf(stderr, "\n" COLOR_GREEN "✓ Cleaned %d conflicting slot(s)" COLOR_RESET "\n", cleaned_count);
-    fprintf(stderr, "\n" COLOR_YELLOW "You can now run:" COLOR_RESET " ./window-toggle --configure\n");
-    fprintf(stderr, COLOR_CYAN "Start mode complete!" COLOR_RESET "\n");
 }
 void show_config(const char *config_path) {
     fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== Window Toggle Configuration ===" COLOR_RESET "\n");
@@ -924,7 +900,9 @@ void usage(const char *prog_name) {
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--run" COLOR_RESET "             Run in toggle mode\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--show" COLOR_RESET "            Show current shortcuts configuration\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--clean" COLOR_RESET "           Clean up all shortcuts and system keybindings\n");
-    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--start" COLOR_RESET "           Clean up conflicting shortcuts and start fresh\n");
+    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--start" COLOR_RESET "           Start the daemon (persistent X connection)\n");
+    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--stop" COLOR_RESET "            Stop the daemon\n");
+    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--status" COLOR_RESET "           Show daemon status\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--key KEY" COLOR_RESET "         Specify which key was pressed (e.g., F2, F3, or plain F2 for Fx-only)\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--config PATH" COLOR_RESET "     Specify custom config file path\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--help" COLOR_RESET "            Show this help message\n");
@@ -974,6 +952,10 @@ int main(int argc, char *argv[]) {
             mode = "clean";
         } else if (strcmp(argv[i], "--start") == 0) {
             mode = "start";
+        } else if (strcmp(argv[i], "--stop") == 0) {
+            mode = "stop";
+        } else if (strcmp(argv[i], "--status") == 0) {
+            mode = "status";
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             usage(argv[0]);
@@ -992,6 +974,10 @@ int main(int argc, char *argv[]) {
             clean_mode_with_path(config_path);
         } else if (strcmp(mode, "start") == 0) {
             start_mode_with_path(config_path);
+        } else if (strcmp(mode, "stop") == 0) {
+            daemon_stop();
+        } else if (strcmp(mode, "status") == 0) {
+            daemon_status();
         }
     } else {
         /* Auto-configure if needed */

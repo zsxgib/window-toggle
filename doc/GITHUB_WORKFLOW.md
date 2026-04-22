@@ -196,3 +196,199 @@ git stash list
 3. **先测后合** - 合并前确保测试通过
 4. **保持同步** - 经常拉取 master 最新代码
 5. **及时清理** - 合并后删除不需要的分支
+
+---
+
+# X 连接限制问题解决方案
+
+## 问题背景
+
+X11 服务器对每个客户端连接有限制（约 500-1000 个）。Chrome 使用多进程架构（每个标签页、扩展都是独立进程），182 个 Chrome 进程耗尽了 X 连接，导致快捷键注册失败。
+
+## 三个解决方案
+
+| 方案 | 技术路线 | 代码改动量 | 复杂度 |
+|------|----------|------------|--------|
+| 方案 1 | 守护进程模式 | 中等 | 低 |
+| 方案 2 | XCB 替代 Xlib | 大 | 中 |
+| 方案 3 | DBus 通信 | 大 | 高 |
+
+---
+
+# 方案 1：守护进程模式
+
+## 核心思路
+
+创建常驻守护进程，维护单一持久 X 连接，所有快捷键操作通过 IPC 通知守护进程处理。
+
+## 分支设计
+
+```
+master ────────────────────────────────────────────────────────
+    │
+    └── feature/daemon-mode (守护进程模式)
+          │
+          ├── 实现步骤:
+          │   1. 创建 daemon.c / daemon.h
+          │   2. 实现 daemon_start() - 启动守护进程
+          │   3. 实现 daemon_run() - 处理 IPC 请求
+          │   4. 修改 window-toggle.c 支持 --start 和 IPC 模式
+          │   5. 添加单一持久 X 连接管理
+          │   6. 测试：Chrome 运行期间快捷键是否有效
+          │
+          └── 合并回 master
+```
+
+## GitHub 操作流程
+
+```bash
+# 1. 创建分支
+git checkout -b feature/daemon-mode
+
+# 2. 开发 - 新增文件
+git add daemon.c daemon.h
+
+# 3. 开发 - 修改文件
+git add window-toggle.c
+
+# 4. 提交
+git commit -m "feat: Add daemon mode with persistent X connection"
+
+# 5. 推送
+git push origin feature/daemon-mode
+
+# 6. 创建 PR 或直接合并
+git checkout master
+git merge feature/daemon-mode
+git tag -a v1.8 -m "v1.8 - 添加守护进程模式"
+git push origin v1.8
+
+# 7. 删除分支
+git branch -d feature/daemon-mode
+git push origin --delete feature/daemon-mode
+```
+
+---
+
+# 方案 2：XCB 替代 Xlib
+
+## 核心思路
+
+使用更轻量的 XCB 库替代 Xlib，减少每个连接的内存占用，从而支持更多连接。
+
+## 分支设计
+
+```
+master ────────────────────────────────────────────────────────
+    │
+    └── refactor/xcb-migration (XCB 重构)
+          │
+          ├── 阶段 1: 核心替换
+          │     ├── 替换 XOpenDisplay → xcb_connect
+          │     ├── 替换 XCloseDisplay → xcb_disconnect
+          │     └── 替换 XGrabKeyboard → xcb_grab_key
+          │
+          ├── 阶段 2: API 适配
+          │     ├── xcb_intern_atom() 替代 XInternAtom
+          │     ├── xcb_send_event() 替代 XSendEvent
+          │     └── xcb_flush() 替代 XFlush
+          │
+          ├── 阶段 3: 测试验证
+          │     └── 确保所有功能与 Xlib 版本一致
+          │
+          └── 合并回 master
+```
+
+## GitHub 操作流程
+
+```bash
+# 1. 创建重构分支
+git checkout -b refactor/xcb-migration
+
+# 2. 阶段 1: 核心替换
+git add xcb-core.c xcb-core.h
+git commit -m "refactor: Add XCB core wrapper layer"
+
+# 3. 阶段 2: API 适配
+git add window-manager-xcb.c
+git commit -m "refactor: Port window-manager.c to XCB"
+
+# 4. 阶段 3: 测试验证
+git add test-xcb.c
+git commit -m "test: Add XCB compatibility tests"
+
+# 5. 推送并合并
+git push origin refactor/xcb-migration
+git checkout master
+git merge refactor/xcb-migration
+git tag -a v2.0 -m "v2.0 - XCB 重构版本"
+git push origin v2.0
+
+# 6. 删除分支
+git branch -d refactor/xcb-migration
+git push origin --delete refactor/xcb-migration
+```
+
+---
+
+# 方案 3：DBus 通信
+
+## 核心思路
+
+不依赖 X 连接，通过 DBus 进程间通信机制处理窗口操作，完全绕过 X 连接限制。
+
+## 分支设计
+
+```
+master ────────────────────────────────────────────────────────
+    │
+    └── feature/dbus (DBus 通信)
+          │
+          ├── 实现 DBus 接口定义
+          ├── 实现 Service 端
+          ├── 实现客户端调用
+          └── 测试完整流程
+```
+
+## GitHub 操作流程
+
+```bash
+# 1. 创建分支
+git checkout -b feature/dbus
+
+# 2. 开发 DBus 服务和客户端
+git add window-toggle-service.c window-toggle-dbus.c
+git commit -m "feat: Add DBus communication support"
+
+# 3. 推送并合并
+git push origin feature/dbus
+git checkout master
+git merge feature/dbus
+git tag -a v2.0 -m "v2.0 - DBus 通信版本"
+git push origin v2.0
+
+# 4. 删除分支
+git branch -d feature/dbus
+git push origin --delete feature/dbus
+```
+
+---
+
+## 方案对比总结
+
+| 方面 | 方案 1 守护进程 | 方案 2 XCB | 方案 3 DBus |
+|------|-----------------|------------|-------------|
+| **代码改动量** | 中等 (新增 daemon.c) | 大 (重写 X 调用) | 大 (新增服务+接口) |
+| **架构复杂度** | 低 | 中 | 高 |
+| **依赖** | 只需 libX11 | 需 libxcb | 需 libdbus |
+| **向后兼容** | 完全兼容 | 需要保留 Xlib fallback | 不兼容，需重写客户端 |
+| **维护成本** | 低 | 中 | 高 |
+| **推荐度** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ |
+
+## 推荐开发顺序
+
+```
+1. 先实现方案 1 (守护进程模式) - 最快解决问题
+2. 如果方案 1 不足，再考虑方案 2 (XCB) - 可选优化
+3. 方案 3 (DBus) - 适合长期架构重构
+```
