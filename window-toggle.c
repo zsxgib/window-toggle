@@ -874,9 +874,10 @@ void show_config(const char *config_path) {
                 groups[g].count == 1 ? "" : "s");
         fprintf(stderr, COLOR_GRAY "%s" COLOR_RESET "\n", "────────────────────");
         for (int i = 0; i < groups[g].count; i++) {
-            fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "%s" COLOR_RESET " → " COLOR_CYAN "%s" COLOR_RESET " " COLOR_GRAY "(0x%lx)" COLOR_RESET "\n",
+            fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "%s" COLOR_RESET " → " COLOR_CYAN "%s" COLOR_RESET " " COLOR_GRAY "[%s]" COLOR_RESET " " COLOR_GRAY "(0x%lx)" COLOR_RESET "\n",
                     groups[g].items[i].shortcut,
                     groups[g].items[i].window_title,
+                    groups[g].items[i].window_class,
                     groups[g].items[i].window_id);
         }
     }
