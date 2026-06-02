@@ -168,14 +168,27 @@ void configure_mode_with_path(const char *config_path) {
                 int f_num = (int)(keysym - 0xffbe + 1);
                 snprintf(selected_key, sizeof(selected_key), "F%d", f_num);
 
-                /* Determine which modifiers were used */
-                int is_ctrl_alt = (event.xkey.state & ControlMask) && (event.xkey.state & Mod1Mask);
-                int is_super = (event.xkey.state & Mod4Mask);
+                /* Determine which modifiers were used.
+                 * 0=none, 1=Ctrl+Alt, 2=Super, 3=Ctrl, 4=Ctrl+Shift */
+                int has_ctrl = (event.xkey.state & ControlMask);
+                int has_alt  = (event.xkey.state & Mod1Mask);
+                int has_super= (event.xkey.state & Mod4Mask);
+                int has_shift= (event.xkey.state & ShiftMask);
+                int is_ctrl_alt   = has_ctrl && has_alt;
+                int is_ctrl_shift = has_ctrl && has_shift && !has_alt && !has_super;
+                int is_ctrl_only  = has_ctrl && !has_alt && !has_super && !has_shift;
+                int is_super      = has_super;
                 char modifier_str[64] = "";
 
                 if (is_ctrl_alt) {
                     strcpy(modifier_str, "Ctrl+Alt");
                     detected_modifiers = 1;
+                } else if (is_ctrl_shift) {
+                    strcpy(modifier_str, "Ctrl+Shift");
+                    detected_modifiers = 4;
+                } else if (is_ctrl_only) {
+                    strcpy(modifier_str, "Ctrl");
+                    detected_modifiers = 3;
                 } else if (is_super) {
                     strcpy(modifier_str, "Super");
                     detected_modifiers = 2;
@@ -198,12 +211,23 @@ void configure_mode_with_path(const char *config_path) {
             else if (event.xkey.state & (ControlMask | Mod1Mask | Mod4Mask)) {
                 /* Determine which modifiers were used */
                 char modifier_str[64] = "";
-                int is_ctrl_alt = (event.xkey.state & ControlMask) && (event.xkey.state & Mod1Mask);
-                int is_super = (event.xkey.state & Mod4Mask);
+                int has_ctrl = (event.xkey.state & ControlMask);
+                int has_alt  = (event.xkey.state & Mod1Mask);
+                int has_super= (event.xkey.state & Mod4Mask);
+                int has_shift= (event.xkey.state & ShiftMask);
+                int is_ctrl_alt   = has_ctrl && has_alt;
+                int is_ctrl_shift = has_ctrl && has_shift && !has_alt && !has_super;
+                int is_ctrl_only  = has_ctrl && !has_alt && !has_super && !has_shift;
                 if (is_ctrl_alt) {
                     strcpy(modifier_str, "Ctrl+Alt");
                     detected_modifiers = 1;
-                } else if (is_super) {
+                } else if (is_ctrl_shift) {
+                    strcpy(modifier_str, "Ctrl+Shift");
+                    detected_modifiers = 4;
+                } else if (is_ctrl_only) {
+                    strcpy(modifier_str, "Ctrl");
+                    detected_modifiers = 3;
+                } else if (has_super) {
                     strcpy(modifier_str, "Super");
                     detected_modifiers = 2;
                 }
@@ -415,17 +439,28 @@ void configure_mode_with_path(const char *config_path) {
     } else if (detected_modifiers == 2) {  /* Super */
         config.modifiers[0] = strdup("Super");
         config.modifiers[1] = NULL;
+    } else if (detected_modifiers == 3) {  /* Ctrl only */
+        config.modifiers[0] = strdup("Ctrl");
+        config.modifiers[1] = NULL;
+    } else if (detected_modifiers == 4) {  /* Ctrl+Shift */
+        config.modifiers[0] = strdup("Ctrl");
+        config.modifiers[1] = strdup("Shift");
+        config.modifiers[2] = NULL;
     }
     config.key = strdup(selected_key);
     config.target_window = selected;
     config.window_title = title;
     config.window_class = class;
-    /* Build the shortcut string (e.g., "Super+F2") */
+    /* Build the shortcut string (e.g., "Super+F2", "Ctrl+F1") */
     char shortcut_str[128];
     if (detected_modifiers == 1) {  /* Ctrl+Alt */
         snprintf(shortcut_str, sizeof(shortcut_str), "Ctrl+Alt+%s", selected_key);
     } else if (detected_modifiers == 2) {  /* Super */
         snprintf(shortcut_str, sizeof(shortcut_str), "Super+%s", selected_key);
+    } else if (detected_modifiers == 3) {  /* Ctrl only */
+        snprintf(shortcut_str, sizeof(shortcut_str), "Ctrl+%s", selected_key);
+    } else if (detected_modifiers == 4) {  /* Ctrl+Shift */
+        snprintf(shortcut_str, sizeof(shortcut_str), "Ctrl+Shift+%s", selected_key);
     } else {
         snprintf(shortcut_str, sizeof(shortcut_str), "%s", selected_key);
     }
@@ -443,6 +478,10 @@ void configure_mode_with_path(const char *config_path) {
         snprintf(shortcut_key, sizeof(shortcut_key), "<Control><Alt>%s", selected_key);
     } else if (detected_modifiers == 2) {
         snprintf(shortcut_key, sizeof(shortcut_key), "<Super>%s", selected_key);
+    } else if (detected_modifiers == 3) {
+        snprintf(shortcut_key, sizeof(shortcut_key), "<Control>%s", selected_key);
+    } else if (detected_modifiers == 4) {
+        snprintf(shortcut_key, sizeof(shortcut_key), "<Control><Shift>%s", selected_key);
     } else {
         /* Fx key alone - use just the key name */
         snprintf(shortcut_key, sizeof(shortcut_key), "%s", selected_key);
@@ -521,7 +560,7 @@ void configure_mode_with_path(const char *config_path) {
     fprintf(stderr, "Using executable: %s\n", exec_path);
     snprintf(command, sizeof(command),
              "dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/command \"%s%s --run --key %s%s\"",
-             next_id, "'", exec_path, selected_key, "'");
+             next_id, "'", exec_path, shortcut_str, "'");
     fprintf(stderr, COLOR_YELLOW "Executing:" COLOR_RESET " %s\n", command);
     if (system(command) == 0) {
         fprintf(stderr, COLOR_GREEN "✓ Command set successfully" COLOR_RESET "\n");
