@@ -91,6 +91,27 @@ Press `Ctrl+Alt+F1` anywhere in GNOME:
 | `--show` | List all configured shortcuts |
 | `--clean` | Remove all shortcuts |
 | `--start` | Clean and start fresh |
+| `--stop` | Stop the daemon |
+| `--status` | Show whether the daemon is running |
+| `--version` | Print version and release highlights |
+| `--key KEY` | Specify which key was pressed (used by the daemon-callback command) |
+| `--config PATH` | Use a non-default config file path |
+
+## Supported Hotkey Modifiers
+
+Starting with v1.8, the same Fx key (e.g. F1) can be bound to five different
+modifier combinations, each toggling an independent window:
+
+- **bare Fx** — e.g. `F1`
+- **Ctrl+Fx** — e.g. `Ctrl+F1`
+- **Ctrl+Alt+Fx** — e.g. `Ctrl+Alt+F1`
+- **Ctrl+Shift+Fx** — e.g. `Ctrl+Shift+F1`
+- **Super+Fx** — e.g. `Super+F1`
+
+Run `window-toggle --configure` once per binding. The tool writes a separate
+dconf slot for each one and the run-time `--key` argument carries the modifier
+through to the lookup, so pressing `Ctrl+F1` toggles the Ctrl+F1 binding
+while pressing plain `F1` toggles the bare-F1 binding.
 
 ## How It Works
 
@@ -112,6 +133,32 @@ Press `Ctrl+Alt+F1` anywhere in GNOME:
 - Ubuntu 24.04 with GNOME
 
 ## Changelog
+
+### v1.8 (2026-06-02)
+- Add `--version` flag with bilingual release notes
+- See v1.7 for the bulk of the modifier-matrix work
+
+### v1.7 (2026-06-02)
+- **Five modifier combinations** can now coexist for the same Fx key
+  (bare Fx, Ctrl+Fx, Ctrl+Alt+Fx, Ctrl+Shift+Fx, Super+Fx), each
+  toggling an independent window
+- Add persistent-X daemon mode (`--start` / `--stop` / `--status`) to
+  avoid the X-connection-exhaustion issue when Chrome has many windows.
+  See `doc/IMPLEMENT_DAEMON_MODE.md` for the design notes
+- dconf command writes the full shortcut string (e.g. `--key Ctrl+F1`)
+  so the run-time lookup can recover the modifier
+- Fix dedup state-machine bug in `save_shortcut_mapping` that was
+  corrupting the config file (the modifiers: line lost its trailing
+  newline through `strcspn`)
+- Increase `line[]` buffer from 512 to 4096 bytes in the config
+  reader; the previous size truncated long `window_title` fields
+
+### v1.6 (2026-05-03)
+- Show `window_class` in `--show` output
+
+### v1.4-v1.5 (2026)
+- Daemon-mode plumbing and assorted fixes; see
+  `doc/GITHUB_STATUS.md` for the historical commit list
 
 ### v1.3 (2026-02-22)
 - Fix config file format corruption when saving shortcuts
