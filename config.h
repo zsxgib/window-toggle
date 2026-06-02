@@ -15,7 +15,7 @@ typedef struct {
 Config* load_config(const char *path);
 void save_config(const char *path, Config *config);
 void save_shortcut_mapping(const char *path, const char *shortcut, Window window_id, const char *window_title, const char *window_class, int slot_id);
-Window find_window_by_key(const char *path, const char *key);
+Window find_window_by_key(const char *path, const char *shortcut);
 int config_exists(const char *path);
 
 /* Default config path */
