@@ -998,18 +998,19 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--status") == 0) {
             mode = "status";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.7\n");
+            printf("window-toggle v1.8\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
             printf("\n");
-            printf("v1.7 主要更新：\n");
+            printf("v1.8 主要更新：\n");
             printf("  - 支持 5 种修饰符快捷键绑定到同一个 Fx 键，互不覆盖：\n");
             printf("    裸 Fx、Ctrl+Fx、Ctrl+Alt+Fx、Ctrl+Shift+Fx、Super+Fx\n");
             printf("  - 每个绑定切换一个独立窗口\n");
             printf("  - dconf 命令通过 --key 参数携带修饰符，运行时可还原\n");
             printf("  - 修复了去重状态机损坏配置文件的 bug\n");
             printf("  - 修复了行缓冲过小截断长 window_title 的问题\n");
+            printf("  - 新增 --version 命令，输出版本和本次主要更新\n");
             printf("\n");
             printf("详细说明见 README.md 和 doc/IMPLEMENT_DAEMON_MODE.md。\n");
             return 0;
