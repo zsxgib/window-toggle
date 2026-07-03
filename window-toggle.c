@@ -830,8 +830,9 @@ void show_config(const char *config_path) {
 
         /* Skip empty lines */
         if (line[0] == '\0') {
-            /* Blank line - if we have a complete config, save it */
-            if (current_modifiers[0] != '\0' && current_key[0] != '\0' && current_window_id != 0) {
+            /* 空行结束一个 slot block。空 modifiers（裸 Fx）合法，
+             * 不该被这条多余的条件过滤掉。 */
+            if (current_key[0] != '\0' && current_window_id != 0) {
                 /* Build shortcut string */
                 char shortcut[128];
                 if (strlen(current_modifiers) > 0 && strcmp(current_modifiers, "Super") != 0 && strcmp(current_modifiers, "Ctrl+Alt") != 0) {
