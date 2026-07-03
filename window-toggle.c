@@ -1170,8 +1170,11 @@ void clean_mode_with_path(const char *config_path) {
                     name_stripped[--len] = '\0';
                 }
 
-                /* Check if name contains 'window-toggle' */
-                if (strstr(name_stripped, "window-toggle") != NULL) {
+                /* 只清 slot 系的 dconf 快捷键（name 严格等于 'window-toggle'）。
+                 * app binding 系的快捷键 name 是 'window-toggle-app'，
+                 * 由 --unbind-app / bindings.json 单独管理，不该被 --clean
+                 * 误删。 */
+                if (strcmp(name_stripped, "window-toggle") == 0) {
                     /* Build the path to remove from list */
                     char remove_path[256];
                     snprintf(remove_path, sizeof(remove_path), "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/", i);
