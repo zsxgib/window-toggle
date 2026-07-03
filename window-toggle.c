@@ -753,6 +753,42 @@ void start_mode_with_path(const char *config_path) {
     }
 }
 void show_config(const char *config_path) {
+    /* App bindings (XDG) shown first so they are visible even when slot config is absent. */
+    {
+        char xdg_path[1024];
+        app_binding_xdg_path(xdg_path, sizeof(xdg_path));
+        AppBinding *list = NULL; int count = 0;
+        app_binding_load(xdg_path, &list, &count);
+        if (count > 0) {
+            fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== App Bindings (%d, from %s) ===" COLOR_RESET "\n", count, xdg_path);
+            Display *disp = XOpenDisplay(NULL);
+            if (disp) { XSync(disp, False); XSetErrorHandler(silent_xerror_handler); }
+            for (int i = 0; i < count; i++) {
+                const char *m = list[i].modifiers ? list[i].modifiers : "";
+                const char *k = list[i].key ? list[i].key : "?";
+                const char *c = list[i].cmd ? list[i].cmd : "?";
+                const char *wc = list[i].wm_class ? list[i].wm_class : "?";
+                const char *status = "not-started";
+                if (list[i].target_window != 0 && disp) {
+                    XWindowAttributes attrs;
+                    if (XGetWindowAttributes(disp, (Window)list[i].target_window, &attrs))
+                        status = "alive";
+                    else
+                        status = "dead";
+                } else if (list[i].target_window != 0) {
+                    status = "anchored";
+                }
+                char shortcut[64];
+                snprintf(shortcut, sizeof(shortcut), "%s%s%s",
+                         m[0] ? m : "", m[0] ? "+" : "", k);
+                fprintf(stderr, "  " COLOR_BOLD "%s" COLOR_RESET "  →  %s (%s)  [anchor: 0x%lx, %s]\n",
+                        shortcut, c, wc, list[i].target_window, status);
+            }
+            if (disp) XCloseDisplay(disp);
+            app_binding_free(list, count);
+            fprintf(stderr, "\n");
+        }
+    }
     fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== Window Toggle Configuration ===" COLOR_RESET "\n");
     if (!config_exists(config_path)) {
         fprintf(stderr, COLOR_YELLOW "No configuration found at %s" COLOR_RESET "\n", config_path);
@@ -947,7 +983,7 @@ void usage(const char *prog_name) {
     fprintf(stderr, "\n" COLOR_BOLD COLOR_YELLOW "Options:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--configure" COLOR_RESET "       Enter configuration mode\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--run" COLOR_RESET "             Run in toggle mode\n");
-    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--show" COLOR_RESET "            Show current shortcuts configuration\n");
+    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--show" COLOR_RESET "            Show slot bindings and app bindings\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--clean" COLOR_RESET "           Clean up all shortcuts and system keybindings\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--start" COLOR_RESET "           Start the daemon (persistent X connection)\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--stop" COLOR_RESET "            Stop the daemon\n");
