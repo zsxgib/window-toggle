@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/select.h>
@@ -1068,10 +1069,20 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--run-app") == 0) {
             mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.9.1\n");
+            printf("window-toggle v1.9.2\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
+            printf("\n");
+            printf("v1.9.2 主要更新：\n");
+            printf("  - 修复 --bind-app 启动后 anchor 永远写不上的 bug：\n");
+            printf("    find_window_by_class 改用 strcasecmp 匹配 WM_CLASS，\n");
+            printf("    避免真实窗口的 res_class（如 code）大小写与用户配置不一致\n");
+            printf("    时 3 秒轮询空转后超时退出、anchor 保持为 0、\n");
+            printf("    下次按键又 fork+execlp 启动新进程。\n");
+            printf("  - 上述修复使 Ctrl+F11 在 VSCode 未运行时按一次即可\n");
+            printf("    启动 code、~1s 内锚定到第一个 Code 窗口、\n");
+            printf("    后续按键正常 toggle 该窗口，不会累积进程。\n");
             printf("\n");
             printf("v1.9.1 主要更新：\n");
             printf("  - 支持 5 种修饰符快捷键绑定到同一个 Fx 键，互不覆盖：\n");
@@ -1618,7 +1629,7 @@ static unsigned long find_window_by_class(Display *display, const char *wm_class
         XClassHint hint;
         if (XGetClassHint(display, list[i], &hint)) {
             int match = 0;
-            if (hint.res_class && strcmp(hint.res_class, wm_class) == 0) match = 1;
+            if (hint.res_class && strcasecmp(hint.res_class, wm_class) == 0) match = 1;
             if (hint.res_class) XFree(hint.res_class);
             if (hint.res_name)  XFree(hint.res_name);
             if (match) { found = (unsigned long)list[i]; break; }
