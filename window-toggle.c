@@ -1287,6 +1287,39 @@ static int find_free_dconf_slot(void) {
     return -1;
 }
 
+/* Find an existing slot already used for an app binding with the given (binding).
+ * If found, returns the slot index; -1 if none. Lets us reuse slots instead of
+ * piling up duplicates when --bind-app is called repeatedly. */
+static int find_existing_app_slot(const char *dconf_binding) {
+    for (int i = 0; i < 100; i++) {
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd),
+                 "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/name 2>/dev/null",
+                 i);
+        FILE *fp = popen(cmd, "r");
+        if (!fp) continue;
+        char name[256];
+        int has_name = (fgets(name, sizeof(name), fp) != NULL);
+        pclose(fp);
+        if (!has_name) continue;
+        name[strcspn(name, "\r\n")] = 0;
+        if (strstr(name, "window-toggle-app") == NULL) continue;
+
+        snprintf(cmd, sizeof(cmd),
+                 "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/binding 2>/dev/null",
+                 i);
+        fp = popen(cmd, "r");
+        if (!fp) continue;
+        char got[256];
+        int has_bind = (fgets(got, sizeof(got), fp) != NULL);
+        pclose(fp);
+        if (!has_bind) continue;
+        got[strcspn(got, "\r\n")] = 0;
+        if (strcmp(got, dconf_binding) == 0) return i;
+    }
+    return -1;
+}
+
 /* Convert "(modifiers, key)" pair back to dconf binding string and a "--key" value
  * suitable for passing to --run-app.
  *   modifiers: "Ctrl+Alt" / "Super" / "Ctrl+Shift" / "Ctrl" / ""
@@ -1322,13 +1355,27 @@ static void shortcut_pair_to_dconf(const char *modifiers, const char *key,
 }
 
 static int register_dconf_app(const char *modifiers, const char *key, const char *cmd_action) {
-    int slot = find_free_dconf_slot();
+    char dconf_key[256], cmdkey[64];
+    shortcut_pair_to_dconf(modifiers, key, dconf_key, sizeof(dconf_key), cmdkey, sizeof(cmdkey));
+    int slot = find_existing_app_slot(dconf_key);
+    if (slot >= 0) {
+        /* Reuse the existing slot; just refresh command/name. */
+        char cmd[4096];
+        snprintf(cmd, sizeof(cmd),
+                 "dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/command \"'%s'\"",
+                 slot, cmd_action);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd),
+                 "dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/name \"'window-toggle-app'\"",
+                 slot);
+        system(cmd);
+        return slot;
+    }
+    slot = find_free_dconf_slot();
     if (slot < 0) {
         fprintf(stderr, COLOR_RED "No free dconf custom-keybinding slot" COLOR_RESET "\n");
         return -1;
     }
-    char dconf_key[256], cmdkey[64];
-    shortcut_pair_to_dconf(modifiers, key, dconf_key, sizeof(dconf_key), cmdkey, sizeof(cmdkey));
     char custom_path[256];
     snprintf(custom_path, sizeof(custom_path),
              "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/", slot);

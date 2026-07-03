@@ -304,13 +304,11 @@ int app_binding_add(const char *config_path, const char *modifiers, const char *
     free(body);
     fclose(out);
 
-    fprintf(stderr, "DBG add: about to ensure_parent_dir, config_path=%s\n", config_path);
     if (ensure_parent_dir(config_path) != 0) {
         app_binding_free(list, count);
         if (in) fclose(in);
         return -1;
     }
-    fprintf(stderr, "DBG add: ensure ok, renaming %s -> %s\n", tmp_path, config_path);
     rename(tmp_path, config_path);
     return 0;
 }
