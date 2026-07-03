@@ -26,6 +26,7 @@ window_toggle = executable('window-toggle',
     'window-manager.c',
     'daemon.c',
     'ipc.c',
+    'app-binding.c',
     dependencies: [x11_dep, xkbcommon_dep, x11_lib],
     install: true,
     install_dir: join_paths(get_option('prefix'), 'bin')

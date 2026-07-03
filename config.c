@@ -48,6 +48,8 @@ Config* load_config(const char *path) {
     char line[256];
 
     while (fgets(line, sizeof(line), fp)) {
+        /* Stop at the app_bindings section delimiter; load_config only reads slot rows. */
+        if (strncmp(line, "### app_bindings ###", 21) == 0) break;
         /* Parse modifiers - simple format: "modifiers: Super" */
         if (strncmp(line, "modifiers:", 10) == 0) {
             char *p = line + 10;
@@ -275,6 +277,24 @@ void save_shortcut_mapping(const char *path, const char *shortcut, Window window
             fclose(fp);
         }
 
+        /* Preserve the app_bindings section (anything after the delimiter) */
+        {
+            rewind(old_fp);
+            char sect_line[8192];
+            int seen_delim = 0;
+            FILE *append_fp = fopen("/tmp/window-toggle-config-temp.json", "a");
+            if (append_fp) {
+                while (fgets(sect_line, sizeof(sect_line), old_fp)) {
+                    if (seen_delim) fputs(sect_line, append_fp);
+                    else {
+                        sect_line[strcspn(sect_line, "\r\n")] = '\0';
+                        if (strcmp(sect_line, "### app_bindings ###") == 0) seen_delim = 1;
+                    }
+                }
+                fclose(append_fp);
+            }
+        }
+
         /* Replace original file */
         rename("/tmp/window-toggle-config-temp.json", path);
     } else {
@@ -330,6 +350,11 @@ Window find_window_by_key(const char *path, const char *shortcut) {
     while (fgets(line, sizeof(line), fp)) {
         /* Remove newline */
         line[strcspn(line, "\r\n")] = 0;
+
+        /* Stop at the app_bindings section delimiter; slot data ends here. */
+        if (strcmp(line, "### app_bindings ###") == 0) {
+            break;
+        }
 
         /* Skip empty lines - if we have a complete config, check if it matches */
         if (line[0] == '\0') {

@@ -11,11 +11,14 @@
 #include <signal.h>
 #include <X11/keysymdef.h>
 #include <X11/Xlib.h>
+#include <X11/Xatom.h>
+#include <X11/Xutil.h>
 #include <X11/XKBlib.h>
 #include "config.h"
 #include "window-manager.h"
 #include "daemon.h"
 #include "ipc.h"
+#include "app-binding.h"
 /* Forward declaration */
 void free_config(Config *config);
 static volatile sig_atomic_t grab_timeout = 0;
@@ -24,9 +27,15 @@ void run_mode_with_path(const char *config_path, const char *key_param);
 void clean_mode_with_path(const char *config_path);
 void start_mode_with_path(const char *config_path);
 void show_config(const char *config_path);
+void bind_app_mode_with_path(const char *config_path, const char *key, const char *cmd, const char *wm_class);
+void unbind_app_mode_with_path(const char *config_path, const char *key);
+void show_app_mode_with_path(const char *config_path);
+void run_app_mode_with_path(const char *config_path, const char *key);
 int find_next_slot_id(const char *config_path);
 
 /* Get the executable path dynamically */
+static int silent_xerror_handler(Display *dpy, XErrorEvent *e) { (void)dpy; (void)e; return 0; }
+
 static void get_exec_path(char *buf, size_t bufsize) {
     ssize_t len = readlink("/proc/self/exe", buf, bufsize - 1);
     if (len != -1) {
@@ -946,7 +955,10 @@ void usage(const char *prog_name) {
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--key KEY" COLOR_RESET "         Specify which key was pressed (e.g., F2, F3, or plain F2 for Fx-only)\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--config PATH" COLOR_RESET "     Specify custom config file path\n");
     fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--help" COLOR_RESET "            Show this help message\n");
-    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--version" COLOR_RESET "         Show version information\n");
+    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--version" COLOR_RESET "         Show version information\n");    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--bind-app K C W" COLOR_RESET "   Bind an app-launch shortcut (e.g. Ctrl+Alt+F12)\n");
+    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--unbind-app K" COLOR_RESET "      Remove an app-launch shortcut\n");
+    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--show-app" COLOR_RESET "          List all app-launch bindings\n");
+    fprintf(stderr, "  " COLOR_BOLD COLOR_MAGENTA "--run-app" COLOR_RESET "          Internal: triggered by the dconf shortcut\n");
     fprintf(stderr, "\n" COLOR_BOLD COLOR_YELLOW "Examples:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_CYAN "%s --configure" COLOR_RESET "\n", prog_name);
     fprintf(stderr, "  " COLOR_CYAN "%s --run --key F2" COLOR_RESET "\n", prog_name);
@@ -997,13 +1009,35 @@ int main(int argc, char *argv[]) {
             mode = "stop";
         } else if (strcmp(argv[i], "--status") == 0) {
             mode = "status";
+        } else if (strcmp(argv[i], "--bind-app") == 0) {
+            if (i + 3 < argc) {
+                bind_app_mode_with_path(config_path, argv[i+1], argv[i+2], argv[i+3]);
+                return 0;
+            } else {
+                fprintf(stderr, "Error: --bind-app requires <key> <cmd> <wm_class>\n");
+                usage(argv[0]);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--unbind-app") == 0) {
+            if (i + 1 < argc) {
+                unbind_app_mode_with_path(config_path, argv[i+1]);
+                return 0;
+            } else {
+                fprintf(stderr, "Error: --unbind-app requires <key>\n");
+                usage(argv[0]);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--show-app") == 0) {
+            mode = "show_app";
+        } else if (strcmp(argv[i], "--run-app") == 0) {
+            mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.8\n");
+            printf("window-toggle v1.9.1\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
             printf("\n");
-            printf("v1.8 主要更新：\n");
+            printf("v1.9.1 主要更新：\n");
             printf("  - 支持 5 种修饰符快捷键绑定到同一个 Fx 键，互不覆盖：\n");
             printf("    裸 Fx、Ctrl+Fx、Ctrl+Alt+Fx、Ctrl+Shift+Fx、Super+Fx\n");
             printf("  - 每个绑定切换一个独立窗口\n");
@@ -1011,6 +1045,9 @@ int main(int argc, char *argv[]) {
             printf("  - 修复了去重状态机损坏配置文件的 bug\n");
             printf("  - 修复了行缓冲过小截断长 window_title 的问题\n");
             printf("  - 新增 --version 命令，输出版本和本次主要更新\n");
+            printf("  - 新增 --bind-app / --unbind-app / --show-app / --run-app：\n");
+            printf("    把「启动应用 + 隐藏/显示」绑到一个修饰符快捷键\n");
+            printf("    （典型: Ctrl+F12 启动并锚定第一个 nautilus 窗口）\n");
             printf("\n");
             printf("详细说明见 README.md 和 doc/IMPLEMENT_DAEMON_MODE.md。\n");
             return 0;
@@ -1036,6 +1073,15 @@ int main(int argc, char *argv[]) {
             daemon_stop();
         } else if (strcmp(mode, "status") == 0) {
             daemon_status();
+        } else if (strcmp(mode, "run_app") == 0) {
+            if (!key_param) {
+                fprintf(stderr, "Error: --run-app requires --key <spec>\n");
+                usage(argv[0]);
+                return 1;
+            }
+            run_app_mode_with_path(config_path, key_param);
+        } else if (strcmp(mode, "show_app") == 0) {
+            show_app_mode_with_path(config_path);
         }
     } else {
         /* Auto-configure if needed */
@@ -1127,12 +1173,55 @@ void clean_mode_with_path(const char *config_path) {
         fprintf(stderr, COLOR_GREEN "\n✓ Cleaned %d window-toggle shortcut(s)" COLOR_RESET "\n", cleaned_count);
     }
 
-    /* Also remove the configuration file content */
-    fprintf(stderr, COLOR_YELLOW "Removing configuration file..." COLOR_RESET "\n");
-    if (unlink(config_path) == 0) {
-        fprintf(stderr, COLOR_GREEN "✓ Removed: %s" COLOR_RESET "\n", config_path);
-    } else {
-        fprintf(stderr, COLOR_YELLOW "Note: Config file not found (may already be removed)." COLOR_RESET "\n");
+    /* Preserve the app_bindings section across --clean; the slot portion is gone. */
+    {
+        FILE *in = fopen(config_path, "r");
+        char *preserved = NULL;
+        size_t preserved_len = 0;
+        if (in) {
+            char line[8192];
+            int seen_delim = 0;
+            size_t cap = 0;
+            while (fgets(line, sizeof(line), in)) {
+                if (!seen_delim) {
+                    line[strcspn(line, "\r\n")] = '\0';
+                    if (strcmp(line, "### app_bindings ###") == 0) seen_delim = 1;
+                    continue;
+                }
+                size_t n = strlen(line);
+                if (preserved_len + n + 1 > cap) {
+                    cap = cap ? cap * 2 : 4096;
+                    if (preserved_len + n + 1 > cap) cap = preserved_len + n + 1;
+                    preserved = realloc(preserved, cap);
+                }
+                if (preserved_len == 0) {
+                    /* Re-emit the section delimiter so the slot parser stops here. */
+                    const char *delim = "### app_bindings ###\n";
+                    size_t dlen = strlen(delim);
+                    memcpy(preserved, delim, dlen);
+                    preserved_len = dlen;
+                }
+                memcpy(preserved + preserved_len, line, n);
+                preserved_len += n;
+            }
+            if (preserved) preserved[preserved_len] = '\0';
+            fclose(in);
+        }
+        fprintf(stderr, COLOR_YELLOW "Removing configuration file (slot portion)..." COLOR_RESET "\n");
+        if (unlink(config_path) == 0) {
+            fprintf(stderr, COLOR_GREEN "✓ Removed: %s" COLOR_RESET "\n", config_path);
+        } else {
+            fprintf(stderr, COLOR_YELLOW "Note: Config file not found (may already be removed)." COLOR_RESET "\n");
+        }
+        if (preserved_len > 0) {
+            FILE *out = fopen(config_path, "w");
+            if (out) {
+                fwrite(preserved, 1, preserved_len, out);
+                fclose(out);
+                fprintf(stderr, COLOR_GREEN "✓ Preserved app_bindings section (%zu bytes)" COLOR_RESET "\n", preserved_len);
+            }
+            free(preserved);
+        }
     }
 
     /* Clean up temporary files */
@@ -1140,4 +1229,415 @@ void clean_mode_with_path(const char *config_path) {
     unlink("/tmp/window-toggle-state");
     unlink("/tmp/window-toggle-active");
     fprintf(stderr, COLOR_GREEN "✓ Clean complete!" COLOR_RESET "\n");
+}
+
+/* ===== App-binding subcommands (v1.9) ===== */
+
+/* Find a free dconf custom-keybinding slot for an app binding. Mirrors
+ * find_next_slot_id in spirit but is local to this file. */
+static int find_free_dconf_slot(void) {
+    for (int i = 0; i < 100; i++) {
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd),
+                 "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/name 2>/dev/null",
+                 i);
+        FILE *fp = popen(cmd, "r");
+        if (!fp) continue;
+        char name[256];
+        int has = (fgets(name, sizeof(name), fp) != NULL);
+        pclose(fp);
+        if (!has) return i;
+    }
+    return -1;
+}
+
+/* Convert "(modifiers, key)" pair back to dconf binding string and a "--key" value
+ * suitable for passing to --run-app.
+ *   modifiers: "Ctrl+Alt" / "Super" / "Ctrl+Shift" / "Ctrl" / ""
+ *   key:       "F12" / "F1" ...
+ *   - binding_out: e.g. "'<Control><Alt>F12'" (GVariant string literal)
+ *   - cmdkey_out:  e.g. "Ctrl+Alt+F12"
+ */
+static void shortcut_pair_to_dconf(const char *modifiers, const char *key,
+                                   char *binding_out, size_t bsz,
+                                   char *cmdkey_out, size_t csz) {
+    /* Build dconf binding. */
+    char inner[128];
+    inner[0] = '\0';
+    if (modifiers && modifiers[0]) {
+        /* Tokenize on '+' and emit <X> tags. */
+        char tmp[64];
+        strncpy(tmp, modifiers, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
+        char *save = NULL;
+        for (char *tok = strtok_r(tmp, "+", &save); tok; tok = strtok_r(NULL, "+", &save)) {
+            if (strcmp(tok, "Ctrl") == 0)      strcat(inner, "<Control>");
+            else if (strcmp(tok, "Alt") == 0) strcat(inner, "<Alt>");
+            else if (strcmp(tok, "Shift") == 0)strcat(inner, "<Shift>");
+            else if (strcmp(tok, "Super") == 0)strcat(inner, "<Super>");
+        }
+    }
+    strcat(inner, key);
+    snprintf(binding_out, bsz, "'%s'", inner);
+    snprintf(cmdkey_out, csz, "%s%s%s",
+             modifiers && modifiers[0] ? modifiers : "",
+             modifiers && modifiers[0] ? "+" : "",
+             key);
+}
+
+static int register_dconf_app(const char *modifiers, const char *key, const char *cmd_action) {
+    int slot = find_free_dconf_slot();
+    if (slot < 0) {
+        fprintf(stderr, COLOR_RED "No free dconf custom-keybinding slot" COLOR_RESET "\n");
+        return -1;
+    }
+    char dconf_key[256], cmdkey[64];
+    shortcut_pair_to_dconf(modifiers, key, dconf_key, sizeof(dconf_key), cmdkey, sizeof(cmdkey));
+    char custom_path[256];
+    snprintf(custom_path, sizeof(custom_path),
+             "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/", slot);
+
+    /* Add to list. */
+    char cmd[4096];
+    FILE *fp = popen("gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings 2>/dev/null", "r");
+    if (!fp) {
+        fprintf(stderr, COLOR_RED "  Failed to query existing shortcuts\n" COLOR_RESET);
+        return -1;
+    }
+    char buffer[8192];
+    if (fgets(buffer, sizeof(buffer), fp) == NULL) {
+        pclose(fp);
+        fprintf(stderr, COLOR_RED "  Could not read shortcuts\n" COLOR_RESET);
+        return -1;
+    }
+    pclose(fp);
+
+    char new_list[8192];
+    if (strncmp(buffer, "@as []", 6) == 0) {
+        snprintf(new_list, sizeof(new_list), "['%s']", custom_path);
+    } else {
+        char *bracket = strrchr(buffer, ']');
+        if (bracket) { *bracket = '\0'; snprintf(new_list, sizeof(new_list), "%s, '%s']", buffer, custom_path); }
+        else { snprintf(new_list, sizeof(new_list), "%s, '%s']", buffer, custom_path); }
+    }
+    snprintf(cmd, sizeof(cmd),
+             "dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings \"%s\"",
+             new_list);
+    if (system(cmd) != 0) {
+        fprintf(stderr, COLOR_RED "Failed to update custom-keybindings list\n" COLOR_RESET);
+        return -1;
+    }
+    usleep(100000);
+
+    snprintf(cmd, sizeof(cmd),
+             "dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/binding \"%s\"",
+             slot, dconf_key);
+    system(cmd);
+    snprintf(cmd, sizeof(cmd),
+             "dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/command \"'%s'\"",
+             slot, cmd_action);
+    system(cmd);
+    snprintf(cmd, sizeof(cmd),
+             "dconf write /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/name \"'window-toggle-app'\"",
+             slot);
+    system(cmd);
+    return slot;
+}
+
+static int unregister_dconf_app(const char *modifiers, const char *key) {
+    char dconf_key[256], cmdkey[64];
+    shortcut_pair_to_dconf(modifiers, key, dconf_key, sizeof(dconf_key), cmdkey, sizeof(cmdkey));
+    for (int i = 0; i < 100; i++) {
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd),
+                 "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/binding 2>/dev/null",
+                 i);
+        FILE *fp = popen(cmd, "r");
+        if (!fp) continue;
+        char got[256];
+        if (fgets(got, sizeof(got), fp) == NULL) { pclose(fp); continue; }
+        pclose(fp);
+        got[strcspn(got, "\r\n")] = '\0';
+        /* dconf returns 'value'; compare on the inner value */
+        if (strcmp(got, dconf_key) != 0) continue;
+        /* Verify name marker */
+        snprintf(cmd, sizeof(cmd),
+                 "dconf read /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/name 2>/dev/null",
+                 i);
+        fp = popen(cmd, "r");
+        if (!fp) continue;
+        char name[256];
+        int has = (fgets(name, sizeof(name), fp) != NULL);
+        pclose(fp);
+        if (!has) continue;
+        name[strcspn(name, "\r\n")] = '\0';
+        if (strstr(name, "window-toggle-app") == NULL) continue;
+
+        /* Reset the slot, then drop it from the list. */
+        char reset_cmd[512];
+        snprintf(reset_cmd, sizeof(reset_cmd),
+                 "dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/ 2>/dev/null",
+                 i);
+        system(reset_cmd);
+
+        char remove_script[256];
+        snprintf(remove_script, sizeof(remove_script), "/tmp/wt_rm_app_%d.py", i);
+        FILE *sf = fopen(remove_script, "w");
+        if (sf) {
+            fprintf(sf, "#!/usr/bin/env python3\n");
+            fprintf(sf, "import subprocess, re\n");
+            fprintf(sf, "slot = %d\n", i);
+            fprintf(sf, "l = subprocess.run(['dconf', 'read', '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings'], capture_output=True, text=True).stdout.strip()\n");
+            fprintf(sf, "if l and l != '@as []':\n");
+            fprintf(sf, "    paths = re.findall(r\"'([^']+)'\", l)\n");
+            fprintf(sf, "    remove = '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%%d/' %% slot\n");
+            fprintf(sf, "    new_paths = [p for p in paths if p != remove]\n");
+            fprintf(sf, "    new_list = '[' + ', '.join(\"'\" + p + \"'\" for p in new_paths) + ']' if new_paths else '@as []'\n");
+            fprintf(sf, "    subprocess.run(['dconf', 'write', '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings', new_list])\n");
+            fclose(sf);
+            char py[512];
+            snprintf(py, sizeof(py), "python3 %s", remove_script);
+            system(py);
+            unlink(remove_script);
+        }
+        return 0;
+    }
+    return -1;
+}
+
+void bind_app_mode_with_path(const char *config_path, const char *key_arg,
+                             const char *cmd_arg, const char *class_arg) {
+    (void)config_path; /* app binding stores under XDG, not the slot config_path */
+    char xdg_path[1024];
+    app_binding_xdg_path(xdg_path, sizeof(xdg_path));
+    config_path = xdg_path;
+    if (!key_arg || !cmd_arg || !class_arg) {
+        fprintf(stderr, COLOR_RED "Usage: --bind-app <key> <cmd> <wm_class>\n" COLOR_RESET);
+        fprintf(stderr, "  e.g. --bind-app Ctrl+Alt+F12 nautilus org.gnome.Nautilus\n");
+        return;
+    }
+    char modifiers[64] = "", key[32] = "";
+    if (parse_shortcut(key_arg, modifiers, sizeof(modifiers), key, sizeof(key)) != 0) {
+        fprintf(stderr, COLOR_RED "Invalid key spec: %s\n" COLOR_RESET, key_arg);
+        return;
+    }
+    if (strlen(key) == 0) {
+        fprintf(stderr, COLOR_RED "Empty key name in: %s\n" COLOR_RESET, key_arg);
+        return;
+    }
+
+    char exec_path[4096];
+    get_exec_path(exec_path, sizeof(exec_path));
+    char cmdkey[64];
+    shortcut_pair_to_dconf(modifiers, key,
+                           (char[256]){0}, 0,  /* discard binding */
+                           cmdkey, sizeof(cmdkey));
+    char action[8192];
+    snprintf(action, sizeof(action), "%s --key %s --run-app", exec_path, cmdkey);
+
+    fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== Binding application to %s ===" COLOR_RESET "\n", key_arg);
+    fprintf(stderr, "  cmd:      %s\n", cmd_arg);
+    fprintf(stderr, "  wm_class: %s\n", class_arg);
+    fprintf(stderr, "  action:   %s\n", action);
+
+    if (register_dconf_app(modifiers, key, action) < 0) {
+        fprintf(stderr, COLOR_RED "Failed to register dconf shortcut\n" COLOR_RESET);
+        return;
+    }
+    fprintf(stderr, COLOR_GREEN "✓ dconf shortcut registered\n" COLOR_RESET);
+
+    if (app_binding_add(config_path, modifiers, key, cmd_arg, class_arg, 0) != 0) {
+        fprintf(stderr, COLOR_RED "Failed to write app binding to config\n" COLOR_RESET);
+        return;
+    }
+    fprintf(stderr, COLOR_GREEN "✓ App binding saved. Press %s to launch/toggle.\n" COLOR_RESET, key_arg);
+}
+
+void unbind_app_mode_with_path(const char *config_path, const char *key_arg) {
+    char xdg_path[1024];
+    app_binding_xdg_path(xdg_path, sizeof(xdg_path));
+    config_path = xdg_path;
+    if (!key_arg) {
+        fprintf(stderr, COLOR_RED "Usage: --unbind-app <key>\n" COLOR_RESET);
+        return;
+    }
+    char modifiers[64] = "", key[32] = "";
+    if (parse_shortcut(key_arg, modifiers, sizeof(modifiers), key, sizeof(key)) != 0) {
+        fprintf(stderr, COLOR_RED "Invalid key spec: %s\n" COLOR_RESET, key_arg);
+        return;
+    }
+    if (unregister_dconf_app(modifiers, key) == 0)
+        fprintf(stderr, COLOR_GREEN "✓ Removed dconf shortcut\n" COLOR_RESET);
+    else
+        fprintf(stderr, COLOR_YELLOW "No matching dconf shortcut found (config entry may still be removed)\n" COLOR_RESET);
+
+    if (app_binding_remove(config_path, modifiers, key) == 0)
+        fprintf(stderr, COLOR_GREEN "✓ Removed app binding from config\n" COLOR_RESET);
+    else
+        fprintf(stderr, COLOR_YELLOW "No matching app binding in config\n" COLOR_RESET);
+}
+
+void show_app_mode_with_path(const char *config_path) {
+    char xdg_path[1024];
+    app_binding_xdg_path(xdg_path, sizeof(xdg_path));
+    config_path = xdg_path;
+    AppBinding *list = NULL; int count = 0;
+    app_binding_load(config_path, &list, &count);
+    if (count == 0) {
+        fprintf(stderr, COLOR_YELLOW "No app bindings configured.\n" COLOR_RESET);
+        fprintf(stderr, "Register one with: --bind-app <key> <cmd> <wm_class>\n");
+        app_binding_free(list, count);
+        return;
+    }
+    Display *display = XOpenDisplay(NULL);
+    if (display) { XSync(display, False); XSetErrorHandler(silent_xerror_handler); }
+    fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== App Bindings (%d) ===" COLOR_RESET "\n", count);
+    for (int i = 0; i < count; i++) {
+        const char *m = list[i].modifiers ? list[i].modifiers : "";
+        const char *k = list[i].key ? list[i].key : "?";
+        const char *c = list[i].cmd ? list[i].cmd : "?";
+        const char *wc = list[i].wm_class ? list[i].wm_class : "?";
+        const char *status = "not-started";
+        if (list[i].target_window != 0 && display) {
+            XWindowAttributes attrs;
+            if (XGetWindowAttributes(display, (Window)list[i].target_window, &attrs))
+                status = "alive";
+            else
+                status = "dead";
+        } else if (list[i].target_window != 0) {
+            status = "anchored";
+        }
+        char shortcut[64];
+        snprintf(shortcut, sizeof(shortcut), "%s%s%s",
+                 m[0] ? m : "", m[0] ? "+" : "", k);
+        fprintf(stderr, "  " COLOR_BOLD "%s" COLOR_RESET "  →  %s (%s)  [anchor: 0x%lx, %s]\n",
+                shortcut, c, wc, list[i].target_window, status);
+    }
+    if (display) XCloseDisplay(display);
+    app_binding_free(list, count);
+}
+
+/* Find a window by WM_CLASS match. Returns 0 if none. */
+static unsigned long find_window_by_class(Display *display, const char *wm_class) {
+    Window root = DefaultRootWindow(display);
+    Atom net_client_list = XInternAtom(display, "_NET_CLIENT_LIST", False);
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems, bytes_after;
+    unsigned char *data = NULL;
+    if (XGetWindowProperty(display, root, net_client_list, 0, ~0L, False, XA_WINDOW,
+                           &actual_type, &actual_format, &nitems, &bytes_after, &data) != Success)
+        return 0;
+    if (!data) return 0;
+    Window *list = (Window *)data;
+    unsigned long found = 0;
+    for (unsigned long i = 0; i < nitems; i++) {
+        XClassHint hint;
+        if (XGetClassHint(display, list[i], &hint)) {
+            int match = 0;
+            if (hint.res_class && strcmp(hint.res_class, wm_class) == 0) match = 1;
+            if (hint.res_class) XFree(hint.res_class);
+            if (hint.res_name)  XFree(hint.res_name);
+            if (match) { found = (unsigned long)list[i]; break; }
+        }
+    }
+    XFree(data);
+    return found;
+}
+
+void run_app_mode_with_path(const char *config_path, const char *key_arg) {
+    char xdg_path[1024];
+    app_binding_xdg_path(xdg_path, sizeof(xdg_path));
+    config_path = xdg_path;
+    if (!key_arg) {
+        fprintf(stderr, COLOR_RED "--run-app requires --key <spec>\n" COLOR_RESET);
+        return;
+    }
+    char modifiers[64] = "", key[32] = "";
+    if (parse_shortcut(key_arg, modifiers, sizeof(modifiers), key, sizeof(key)) != 0) {
+        fprintf(stderr, COLOR_RED "Invalid key spec: %s\n" COLOR_RESET, key_arg);
+        return;
+    }
+    AppBinding *list = NULL; int count = 0;
+    app_binding_load(config_path, &list, &count);
+    const AppBinding *b = app_binding_find(list, count, modifiers, key);
+    if (!b) {
+        fprintf(stderr, COLOR_RED "No app binding for %s\n" COLOR_RESET, key_arg);
+        app_binding_free(list, count);
+        return;
+    }
+    char cmd[256], wc[256], bound_mod[64], bound_key[32];
+    strncpy(cmd, b->cmd ? b->cmd : "", sizeof(cmd) - 1); cmd[sizeof(cmd)-1] = '\0';
+    strncpy(wc,  b->wm_class ? b->wm_class : "", sizeof(wc) - 1); wc[sizeof(wc)-1] = '\0';
+    strncpy(bound_mod, b->modifiers ? b->modifiers : "", sizeof(bound_mod) - 1); bound_mod[sizeof(bound_mod)-1] = '\0';
+    strncpy(bound_key, b->key ? b->key : "", sizeof(bound_key) - 1); bound_key[sizeof(bound_key)-1] = '\0';
+    unsigned long anchor = b->target_window;
+    app_binding_free(list, count);
+
+    fprintf(stderr, "Window Toggle (app): key=%s cmd=%s class=%s anchor=0x%lx\n",
+            key_arg, cmd, wc, anchor);
+
+    Display *display = XOpenDisplay(NULL);
+    if (!display) {
+        fprintf(stderr, COLOR_RED "Failed to open X display\n" COLOR_RESET);
+        return;
+    }
+    /* Tolerate stale XIDs: anchor may have died; suppress BadWindow noise. */
+    XSync(display, False);
+    XSetErrorHandler(silent_xerror_handler);
+
+
+    /* Step 1: try the anchored window. */
+    int state = STATE_NOT_RUNNING;
+    if (anchor != 0) {
+        state = get_window_state(display, (Window)anchor);
+        if (state == STATE_NOT_RUNNING) {
+            fprintf(stderr, COLOR_YELLOW "Anchored window 0x%lx is gone, will relaunch\n" COLOR_RESET, anchor);
+        }
+    }
+
+    if (state == STATE_NOT_RUNNING) {
+        /* Step 2: launch and poll for a matching window. */
+        fprintf(stderr, COLOR_BOLD "Launching: %s\n" COLOR_RESET, cmd);
+        fflush(stderr);
+        pid_t pid = fork();
+        if (pid == 0) {
+            setsid();
+            execlp(cmd, cmd, NULL);
+            perror("exec failed");
+            _exit(1);
+        } else if (pid < 0) {
+            perror("fork failed");
+            XCloseDisplay(display);
+            return;
+        }
+
+        unsigned long found = 0;
+        const int max_iters = 30; /* 30 * 100ms = 3s */
+        for (int i = 0; i < max_iters; i++) {
+            usleep(100000);
+            found = find_window_by_class(display, wc);
+            if (found) break;
+        }
+        if (!found) {
+            fprintf(stderr, COLOR_RED "Timeout: no %s window appeared within 3s\n" COLOR_RESET, wc);
+            XCloseDisplay(display);
+            return;
+        }
+        fprintf(stderr, COLOR_GREEN "Anchoring to new window 0x%lx\n" COLOR_RESET, found);
+        app_binding_update_anchor(config_path, bound_mod, bound_key, found);
+        /* New window is visible by default — do not toggle. */
+        XCloseDisplay(display);
+        return;
+    }
+
+    /* Step 3: anchored window exists → toggle (minimize / activate). */
+    if (state == STATE_HIDDEN) {
+        activate_window(display, (Window)anchor);
+        fprintf(stderr, COLOR_GREEN "Window activated\n" COLOR_RESET);
+    } else {
+        minimize_window(display, (Window)anchor);
+        fprintf(stderr, COLOR_GREEN "Window minimized\n" COLOR_RESET);
+    }
+    XCloseDisplay(display);
 }

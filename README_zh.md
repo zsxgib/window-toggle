@@ -131,7 +131,43 @@ window-toggle --show
 
 - Ubuntu 24.04 with GNOME
 
+## 应用绑定（v1.9+）
+
+把一个修饰符快捷键绑定到「启动某个应用 + 切换这个窗口」：
+
+```bash
+# 把 Ctrl+F12 绑到 nautilus,首次启动的窗口被锚定
+window-toggle --bind-app Ctrl+F12 nautilus org.gnome.Nautilus
+
+# 查看已绑定的应用
+window-toggle --show-app
+
+# 删除绑定
+window-toggle --unbind-app Ctrl+F12
+```
+
+按下快捷键时的行为：
+
+- 锚定窗口仍在 —— 切换（最小化 / 激活），与普通 slot 完全一致。
+- 锚定窗口已退出 —— `fork+execlp <cmd>` 启动命令，轮询 `WM_CLASS` 匹配的窗口，把第一个匹配项作为新锚定写入配置。新启动的窗口默认就是可见的，所以不会再 toggle。
+- 多实例：用户手动开第二个相同应用时，绑定**不会**漂移到新窗口，锚定始终是首次启动那一个。
+
+存储：仍在 `/tmp/window-toggle-config.json` 内，以 `### app_bindings ###` 行为段边界。slot 解析在该行停止，互不干扰。`--clean` 会清空 slot 但保留 app 段。
+
 ## 更新日志
+
+### v1.9.1 (2026-07-03)
+- 修复: dconf action 的参数顺序改为 `--key X --run-app`,使 dconf 回调能真正触发
+- 修复: app binding 配置改为存到 `~/.config/window-toggle/bindings.json`(XDG 路径),重启后保留
+- chore: 首次写入时自动创建父目录
+
+### v1.9 (2026-07-03)
+- 新增 `--bind-app <key> <cmd> <wm_class>`：把快捷键绑定到「启动应用 + 切换窗口」
+- 新增 `--unbind-app <key>`、`--show-app`、`--run-app`（dconf 回调）
+- 锚定语义：首次启动的窗口被记住，永不漂移
+- 配置：应用绑定存储在 `### app_bindings ###` 段，与 slot 数据隔离
+- `--clean` 保留 app 段；移除单个绑定用 `--unbind-app`
+- 为失效锚定的 XID 检查增加静默 XErrorHandler
 
 ### v1.8 (2026-06-02)
 - 新增 `--version` 命令，输出中英双语的版本说明

@@ -132,7 +132,43 @@ while pressing plain `F1` toggles the bare-F1 binding.
 
 - Ubuntu 24.04 with GNOME
 
+## App Bindings (v1.9+)
+
+Bind a modifier shortcut to "launch this app + toggle this window":
+
+```bash
+# Bind Ctrl+F12 to launch nautilus, anchored to the first launched window
+window-toggle --bind-app Ctrl+F12 nautilus org.gnome.Nautilus
+
+# List bindings
+window-toggle --show-app
+
+# Remove a binding
+window-toggle --unbind-app Ctrl+F12
+```
+
+Behavior on press:
+
+- If the anchored window is alive — toggle (minimize / activate), same as a normal slot binding.
+- If the anchored window is gone — `fork+execlp <cmd>`, poll for a window matching `WM_CLASS`, anchor the first match, and stop. The newly-launched window is visible by default, so it is not toggled.
+- Multi-instance: opening a second instance of the same class does **not** drift the binding; the anchor stays on the originally launched window.
+
+Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app_bindings ###`. The slot pipeline stops at this delimiter, so app bindings and slot bindings do not interfere. `--clean` removes slot bindings but preserves the app section.
+
 ## Changelog
+
+### v1.9.1 (2026-07-03)
+- fix: dconf action parameter order (`--key X --run-app` instead of `--run-app --key X`) so the dconf callback actually fires
+- fix: app binding config now lives at `~/.config/window-toggle/bindings.json` (XDG) instead of `/tmp/window-toggle-config.json`, so bindings survive reboot
+- chore: ensure parent dir is created on first write
+
+### v1.9 (2026-07-03)
+- New: `--bind-app <key> <cmd> <wm_class>` to bind a shortcut to "launch app + toggle window"
+- New: `--unbind-app <key>`, `--show-app`, `--run-app` (dconf callback)
+- Anchor semantics: first launched window is remembered, never drifts
+- Config: app bindings stored in a `### app_bindings ###` section, isolated from slot data
+- `--clean` preserves the app section; use `--unbind-app` to remove a single binding
+- Silent XErrorHandler added around stale-anchor checks
 
 ### v1.8 (2026-06-02)
 - Add `--version` flag with bilingual release notes
