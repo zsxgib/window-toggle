@@ -277,21 +277,28 @@ void save_shortcut_mapping(const char *path, const char *shortcut, Window window
             fclose(fp);
         }
 
-        /* Preserve the app_bindings section (anything after the delimiter) */
+        /* Preserve the app_bindings section (anything after the delimiter).
+         * 注意：old_fp 在上面已经 fclose()。用已关闭的 FILE* 调
+         * rewind()/fgets() 是未定义行为，glibc 在 IO 清理时会撞上
+         * 'free(): invalid pointer' 断言 → IOT core dump。
+         * 重新 fopen 一次得到独立的 preserved_fp 解决 UAF。 */
         {
-            rewind(old_fp);
-            char sect_line[8192];
-            int seen_delim = 0;
-            FILE *append_fp = fopen("/tmp/window-toggle-config-temp.json", "a");
-            if (append_fp) {
-                while (fgets(sect_line, sizeof(sect_line), old_fp)) {
-                    if (seen_delim) fputs(sect_line, append_fp);
-                    else {
-                        sect_line[strcspn(sect_line, "\r\n")] = '\0';
-                        if (strcmp(sect_line, "### app_bindings ###") == 0) seen_delim = 1;
+            FILE *preserved_fp = fopen(path, "r");
+            if (preserved_fp) {
+                char sect_line[8192];
+                int seen_delim = 0;
+                FILE *append_fp = fopen("/tmp/window-toggle-config-temp.json", "a");
+                if (append_fp) {
+                    while (fgets(sect_line, sizeof(sect_line), preserved_fp)) {
+                        if (seen_delim) fputs(sect_line, append_fp);
+                        else {
+                            sect_line[strcspn(sect_line, "\r\n")] = '\0';
+                            if (strcmp(sect_line, "### app_bindings ###") == 0) seen_delim = 1;
+                        }
                     }
+                    fclose(append_fp);
                 }
-                fclose(append_fp);
+                fclose(preserved_fp);
             }
         }
 
