@@ -426,6 +426,22 @@ def build_shortcut_label(b):
     return f"{mod}+{key}" if mod else key
 
 
+def _sort_key(b):
+    """Return a tuple (kind_rank, modifier_count, f_number) used to sort
+    bindings inside the viewer. App bindings come first (kind_rank 0),
+    then slot bindings (1). Within each group, fewer modifiers come
+    first, then lower F-key numbers."""
+    kind_rank = 0 if b.get("kind") == "app" else 1
+    mod = b.get("modifiers", "")
+    mod_count = mod.count("+") if mod else 0
+    key = b.get("key", "")
+    if key.startswith("F") and key[1:].isdigit():
+        fn = int(key[1:])
+    else:
+        fn = 99
+    return (kind_rank, mod_count, fn)
+
+
 def build_binding_widgets():
     widgets = []
     for a in read_app_bindings():
@@ -435,6 +451,8 @@ def build_binding_widgets():
             anchor = 0
         widgets.append({
             "shortcut": build_shortcut_label(a),
+            "modifiers": a.get("modifiers", ""),
+            "key": a.get("key", ""),
             "label": a.get("cmd", ""),
             "wm_class": a.get("wm_class", ""),
             "status": status_for(anchor),
@@ -447,11 +465,14 @@ def build_binding_widgets():
             anchor = 0
         widgets.append({
             "shortcut": build_shortcut_label(slot),
+            "modifiers": slot.get("modifiers", ""),
+            "key": slot.get("key", ""),
             "label": slot.get("window_title") or slot.get("window_class", ""),
             "wm_class": slot.get("window_class", ""),
             "status": status_for(anchor),
             "kind": "slot",
         })
+    widgets.sort(key=_sort_key)
     return widgets
 
 
