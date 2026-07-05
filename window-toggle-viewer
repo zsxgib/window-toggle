@@ -5,6 +5,7 @@
 # app name as captions. No interaction beyond Esc/close to dismiss.
 
 import os
+import signal
 import subprocess
 import sys
 import configparser
@@ -23,7 +24,111 @@ except (ImportError, ValueError) as e:
     sys.exit(1)
 
 WT_BIN = "/usr/local/bin/window-toggle"
-ICON_SIZE = 64
+ICON_SIZE = 96
+
+
+def _mouse_position():
+    """Read mouse position via xdotool. Returns (x, y) in root coords, or None."""
+    try:
+        r = subprocess.run(
+            ["xdotool", "getmouselocation", "--shell"],
+            capture_output=True, text=True, timeout=1,
+        )
+        if r.returncode != 0:
+            return None
+        x = y = 0
+        for line in r.stdout.splitlines():
+            if line.startswith("X="):
+                x = int(line[2:])
+            elif line.startswith("Y="):
+                y = int(line[2:])
+        return (x, y)
+    except Exception:
+        return None
+
+
+def _monitor_at_mouse(display):
+    """Return the Gdk.Monitor that currently contains the mouse pointer,
+    or the primary monitor if the lookup fails.
+
+    GTK4's Gdk.X11Display does not implement get_monitor_at_point in
+    the Python bindings. We use xdotool for the mouse position (which
+    returns physical pixels) and convert each monitor's geometry from
+    logical to physical via its scale factor before comparing.
+    """
+    pos = _mouse_position()
+    if pos is not None:
+        mx, my = pos
+        monitors = display.get_monitors()
+        n = monitors.get_n_items()
+        for i in range(n):
+            m = monitors.get_item(i)
+            try:
+                g = m.get_geometry()
+                scale = m.get_scale_factor() or 1
+            except Exception:
+                continue
+            # Convert logical -> physical.
+            px, py = g.x * scale, g.y * scale
+            pw, ph = g.width * scale, g.height * scale
+            if px <= mx < px + pw and py <= my < py + ph:
+                return m
+    return display.get_primary_monitor() or display.get_monitors().get_item(0)
+
+
+def _center_window(win, width, height):
+    """Place win at the center of the monitor where the mouse currently is.
+
+    GTK4's monitor geometry is in scaled (logical) pixels, while xdotool
+    expects physical pixel coordinates. We use Gdk.Monitor.get_scale_factor()
+    to convert, then call xdotool to move the realized surface.
+    """
+    display = Gdk.Display.get_default()
+    if not display:
+        return
+    monitor = _monitor_at_mouse(display)
+    if monitor is None:
+        return
+    geo = monitor.get_geometry()
+    scale = monitor.get_scale_factor() or 1.0
+    cx = geo.x + max(0, (geo.width - width) // 2)
+    cy = geo.y + max(0, (geo.height - height) // 2)
+    px = int(cx * scale)
+    py = int(cy * scale)
+
+    win.set_default_size(width, height)
+    win.set_size_request(width, height)
+
+    # Re-read mouse position at call time, recompute center, then move.
+    # The captured px/py from _center_window call are stale for the
+    # second show; we re-derive from the current mouse each time.
+    display = Gdk.Display.get_default()
+
+    def _place():
+        try:
+            from gi.repository import GdkX11  # noqa
+            surface = win.get_surface()
+            if surface is None:
+                return False
+            if not isinstance(surface, GdkX11.X11Surface):
+                return False
+            xid = surface.get_xid()
+            # Recompute target from current mouse position.
+            mon = _monitor_at_mouse(display)
+            if mon is not None:
+                geo = mon.get_geometry()
+                scale = mon.get_scale_factor() or 1.0
+                tx = int((geo.x + max(0, (geo.width - width) // 2)) * scale)
+                ty = int((geo.y + max(0, (geo.height - height) // 2)) * scale)
+            else:
+                tx, ty = px, py
+            subprocess.Popen(["xdotool", "windowmove", hex(xid), str(tx), str(ty)])
+        except Exception:
+            pass
+        return False
+    GLib.idle_add(_place)
+    GLib.timeout_add(100, _place)
+    return _place
 STATUS_ALIVE = "alive"
 STATUS_DEAD = "dead"
 STATUS_NOT_STARTED = "not-started"
@@ -279,10 +384,10 @@ def build_binding_box(b):
 
     inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
                     halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
-    inner.set_margin_top(8)
-    inner.set_margin_bottom(8)
-    inner.set_margin_start(8)
-    inner.set_margin_end(8)
+    inner.set_margin_top(12)
+    inner.set_margin_bottom(12)
+    inner.set_margin_start(12)
+    inner.set_margin_end(12)
 
     inner.append(img)
 
@@ -312,16 +417,71 @@ def build_binding_box(b):
     return inner
 
 
+VIEWER_PID_PATH = "/tmp/window-toggle-viewer.pid"
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+def signal_existing_daemon():
+    """If a viewer daemon is already running, send SIGUSR1 to toggle visibility.
+    Returns True if a signal was sent."""
+    try:
+        with open(VIEWER_PID_PATH) as f:
+            pid = int(f.read().strip() or "0")
+    except (OSError, ValueError):
+        return False
+    if pid <= 0 or not _pid_alive(pid):
+        return False
+    try:
+        os.kill(pid, signal.SIGUSR1)
+        return True
+    except OSError:
+        return False
+
 def main():
     if not os.path.exists(WT_BIN):
         sys.stderr.write(f"window-toggle-viewer: {WT_BIN} not found\n")
         sys.exit(1)
 
+    # If a viewer daemon is already running, just signal it to toggle and exit.
+    if signal_existing_daemon():
+        sys.exit(0)
+
     app = Gtk.Application(application_id="org.windowtoggle.viewer", flags=0)
+
+    state = {"win": None, "visible": False}
+
+    def toggle_visibility(*args):
+        w = state["win"]
+        if w is None:
+            return
+        if state["visible"]:
+            w.set_visible(False)
+            state["visible"] = False
+        else:
+            w.present()
+            state["visible"] = True
+            # Re-center on every show because mutter does not preserve
+            # the previous position when a window is hidden and re-shown.
+            if state.get("place_fn"):
+                state["place_fn"]()
+
+    def on_sigusr1(signum, frame):
+        # Called from GTK main loop via GLib.idle_add to be thread-safe.
+        GLib.idle_add(toggle_visibility)
 
     def on_activate(a):
         import sys
         win = Gtk.Window(application=a)
+        state["win"] = win
+        # Write PID file and install signal handler.
+        with open(VIEWER_PID_PATH, "w") as f:
+            f.write(str(os.getpid()))
+        signal.signal(signal.SIGUSR1, on_sigusr1)
         win.set_title("window-toggle bindings")
         win.set_decorated(False)
         win.set_resizable(False)
@@ -333,34 +493,35 @@ def main():
 
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         hbox.set_homogeneous(False)
-        hbox.set_margin_start(8)
-        hbox.set_margin_end(8)
-        hbox.set_margin_top(8)
-        hbox.set_margin_bottom(8)
+        hbox.set_margin_start(12)
+        hbox.set_margin_end(12)
+        hbox.set_margin_top(12)
+        hbox.set_margin_bottom(12)
 
         for b in bindings:
             hbox.append(build_binding_box(b))
 
         n = len(bindings)
-        item_w = ICON_SIZE + 24
+        item_w = ICON_SIZE + 32
         width = n * item_w + 24
-        height = ICON_SIZE + 56
+        height = ICON_SIZE + 72
 
         hbox.set_size_request(width, height)
         win.set_child(hbox)
         win.set_default_size(width, height)
+        state["place_fn"] = _center_window(win, width, height)
 
         css = Gtk.CssProvider()
         css.load_from_data(b"""
-            .wt-status-glyph { font-size: 14px; }
-            .wt-key { font-size: 12px; font-weight: bold; }
-            .wt-name { font-size: 10px; opacity: 0.8; }
+            .wt-status-glyph { font-size: 18px; color: #ffffff; }
+            .wt-key { font-size: 16px; font-weight: bold; color: #ffffff; }
+            .wt-name { font-size: 13px; opacity: 0.8; color: #ffffff; }
             .wt-status-alive { color: #4caf50; }
-            .wt-status-dead { color: #9e9e9e; }
+            .wt-status-dead { color: #cccccc; }
             .wt-status-notstarted { color: #ff9800; }
             .wt-dim { opacity: 0.4; }
             .wt-dim-more { opacity: 0.2; }
-            window { background: alpha(#1e1e1e, 0.92); border-radius: 12px; }
+            window { background: alpha(#1e1e1e, 0.92); color: #ffffff; border-radius: 12px; }
         """)
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), css,
@@ -369,11 +530,11 @@ def main():
 
 
         def on_key(ctrl, keyval, keycode, state):
-            a.quit()
+            toggle_visibility()
             return True
 
         def on_focus_out(ctrl, *args):
-            a.quit()
+            toggle_visibility()
             return False
 
         key = Gtk.EventControllerKey()
@@ -384,10 +545,34 @@ def main():
         focus.connect("leave", on_focus_out)
         win.add_controller(focus)
 
+        state["visible"] = True
+
+        def on_destroy(*args):
+            try:
+                os.unlink(VIEWER_PID_PATH)
+            except OSError:
+                pass
+
+        win.connect("destroy", on_destroy)
         win.present()
 
+    def on_sigterm(signum, frame):
+        app.quit()
+
+    signal.signal(signal.SIGTERM, on_sigterm)
+
     app.connect("activate", on_activate)
-    app.run([])
+    # No dbus activation in this command-line invocation, so call on_activate
+    # directly to set up the window. After that, app.run() processes signal
+    # callbacks and the toggle_visibility idle_add.
+    on_activate(app)
+    try:
+        app.run([])
+    finally:
+        try:
+            os.unlink(VIEWER_PID_PATH)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
