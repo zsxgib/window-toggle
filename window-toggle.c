@@ -1626,6 +1626,68 @@ void show_app_mode_with_path(const char *config_path) {
     app_binding_free(list, count);
 }
 
+/* Snapshot the current _NET_CLIENT_LIST. Returns a malloc'd array of
+ * Window XIDs terminated by 0, or NULL on error. Used to tell newly
+ * spawned windows apart from older ones that happen to share the same
+ * WM_CLASS (e.g. several X-terminal-emulator processes on the desktop). */
+static Window *snapshot_existing_windows(Display *display) {
+    Window root = DefaultRootWindow(display);
+    Atom net_client_list = XInternAtom(display, "_NET_CLIENT_LIST", False);
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems, bytes_after;
+    unsigned char *data = NULL;
+    if (XGetWindowProperty(display, root, net_client_list, 0, ~0L, False, XA_WINDOW,
+                           &actual_type, &actual_format, &nitems, &bytes_after, &data) != Success)
+        return NULL;
+    if (!data) return NULL;
+    Window *out = malloc(sizeof(Window) * (nitems + 1));
+    if (!out) { XFree(data); return NULL; }
+    memcpy(out, data, sizeof(Window) * nitems);
+    out[nitems] = 0;
+    XFree(data);
+    return out;
+}
+
+static int window_in_list(Window w, const Window *list) {
+    if (!list) return 0;
+    for (const Window *p = list; *p; p++) {
+        if (*p == w) return 1;
+    }
+    return 0;
+}
+
+/* Find a window by WM_CLASS match, restricted to windows that did NOT
+ * exist in `exclude` (i.e. windows spawned by this process). Returns 0
+ * if none. */
+static unsigned long find_new_window_by_class(Display *display, const char *wm_class, const Window *exclude) {
+    Window root = DefaultRootWindow(display);
+    Atom net_client_list = XInternAtom(display, "_NET_CLIENT_LIST", False);
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems, bytes_after;
+    unsigned char *data = NULL;
+    if (XGetWindowProperty(display, root, net_client_list, 0, ~0L, False, XA_WINDOW,
+                           &actual_type, &actual_format, &nitems, &bytes_after, &data) != Success)
+        return 0;
+    if (!data) return 0;
+    Window *list = (Window *)data;
+    unsigned long found = 0;
+    for (unsigned long i = 0; i < nitems; i++) {
+        if (window_in_list(list[i], exclude)) continue;
+        XClassHint hint;
+        if (XGetClassHint(display, list[i], &hint)) {
+            int match = 0;
+            if (hint.res_class && strcasecmp(hint.res_class, wm_class) == 0) match = 1;
+            if (hint.res_class) XFree(hint.res_class);
+            if (hint.res_name)  XFree(hint.res_name);
+            if (match) { found = (unsigned long)list[i]; break; }
+        }
+    }
+    XFree(data);
+    return found;
+}
+
 /* Find a window by WM_CLASS match. Returns 0 if none. */
 static unsigned long find_window_by_class(Display *display, const char *wm_class) {
     Window root = DefaultRootWindow(display);
@@ -1709,6 +1771,14 @@ void run_app_mode_with_path(const char *config_path, const char *key_arg) {
         /* Step 2: launch and poll for a matching window. */
         fprintf(stderr, COLOR_BOLD "Launching: %s\n" COLOR_RESET, cmd);
         fflush(stderr);
+        /* Snapshot the desktop window list BEFORE forking. Several apps
+         * share the same WM_CLASS (every X-terminal-emulator reports
+         * "X-terminal-emulator"). Without this snapshot,
+         * find_window_by_class would happily return some pre-existing
+         * terminal window belonging to a different binding, and the
+         * new shortcut would anchor to the wrong window. */
+        Window *pre_existing = snapshot_existing_windows(display);
+
         pid_t pid = fork();
         if (pid == 0) {
             setsid();
@@ -1717,6 +1787,7 @@ void run_app_mode_with_path(const char *config_path, const char *key_arg) {
             _exit(1);
         } else if (pid < 0) {
             perror("fork failed");
+            free(pre_existing);
             XCloseDisplay(display);
             return;
         }
@@ -1725,9 +1796,10 @@ void run_app_mode_with_path(const char *config_path, const char *key_arg) {
         const int max_iters = 30; /* 30 * 100ms = 3s */
         for (int i = 0; i < max_iters; i++) {
             usleep(100000);
-            found = find_window_by_class(display, wc);
+            found = find_new_window_by_class(display, wc, pre_existing);
             if (found) break;
         }
+        free(pre_existing);
         if (!found) {
             fprintf(stderr, COLOR_RED "Timeout: no %s window appeared within 3s\n" COLOR_RESET, wc);
             XCloseDisplay(display);
