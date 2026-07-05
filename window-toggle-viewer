@@ -133,10 +133,52 @@ STATUS_ALIVE = "alive"
 STATUS_DEAD = "dead"
 STATUS_NOT_STARTED = "not-started"
 
+# Paths to the two config files. Tracked by a periodic mtime check so the
+# viewer can pick up new bindings without being restarted.
+APP_BINDINGS_PATH = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+    "window-toggle", "bindings.json",
+)
+SLOT_BINDINGS_PATH = "/tmp/window-toggle-config.json"
+def _check_files_mtime():
+    """Return a stable signature that changes whenever either config file is
+    added, modified, or removed. We can't rely on a single mtime: if the
+    slot file is deleted, its mtime slot would simply drop to 0 and look
+    unchanged from the previous "no slot file" reading. Instead, we hash
+    the (mtime_or_minus_1, size_or_minus_1) tuple of each file. -1 marks a
+    missing file, so a delete flips its mtime/size from real values to
+    -1/-1, which the comparison below will detect."""
+    sigs = []
+    for path in (APP_BINDINGS_PATH, SLOT_BINDINGS_PATH):
+        try:
+            st = os.stat(path)
+            sigs.append((st.st_mtime, st.st_size))
+        except OSError:
+            sigs.append((-1, -1))
+    return tuple(sigs)
+
+
+def _layout_into(box, items):
+    """Clear the existing children of `box`, then append a freshly built
+    widget for each entry in `items`. Returns (width, height) for the new
+    layout. GTK4 Box has no clear() in PyGObject, so we pop one at a time."""
+    while True:
+        child = box.get_first_child()
+        if child is None:
+            break
+        box.remove(child)
+    for b in items:
+        box.append(build_binding_box(b))
+    n = len(items)
+    item_w = ICON_SIZE + 32
+    width = n * item_w + 24
+    height = ICON_SIZE + 72
+    box.set_size_request(width, height)
+    return width, height
+
 
 def read_app_bindings():
-    xdg = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
-    path = os.path.join(xdg, "window-toggle", "bindings.json")
+    path = APP_BINDINGS_PATH
     if not os.path.exists(path):
         return []
     out = []
@@ -164,7 +206,7 @@ def read_app_bindings():
 
 
 def read_slot_bindings():
-    path = "/tmp/window-toggle-config.json"
+    path = SLOT_BINDINGS_PATH
     if not os.path.exists(path):
         return []
     out = []
@@ -462,20 +504,39 @@ def main():
         if state["visible"]:
             w.set_visible(False)
             state["visible"] = False
-        else:
-            w.present()
-            state["visible"] = True
-            # Re-center on every show because mutter does not preserve
-            # the previous position when a window is hidden and re-shown.
-            if state.get("place_fn"):
-                state["place_fn"]()
+            return
+        # About to show: re-read the config files so any binding added
+        # since the last show (or since the viewer started) is reflected.
+        # Cheap if mtime hasn't changed.
+        current = _check_files_mtime()
+        last = state.get("last_mtime", 0)
+        if current != last:
+            state["last_mtime"] = current
+            new_bindings = build_binding_widgets()
+            old_keys = [b.get("label","") + "|" + b.get("shortcut","") for b in state.get("last_bindings", [])]
+            new_keys = [b.get("label","") + "|" + b.get("shortcut","") for b in new_bindings]
+            if old_keys != new_keys:
+                state["last_bindings"] = new_bindings
+                box = state.get("hbox")
+                if box is not None:
+                    w2, h2 = _layout_into(box, new_bindings)
+                    w.set_default_size(w2, h2)
+        w.present()
+        state["visible"] = True
+        # Re-center on every show because mutter does not preserve
+        # the previous position when a window is hidden and re-shown.
+        if state.get("place_fn"):
+            state["place_fn"]()
 
     def on_sigusr1(signum, frame):
         # Called from GTK main loop via GLib.idle_add to be thread-safe.
         GLib.idle_add(toggle_visibility)
 
     def on_activate(a):
-        import sys
+        # If a previous activate (manual or via dbus) already built the
+        # window, do nothing. Otherwise we'd leak an orphan Window.
+        if state.get("win") is not None:
+            return
         win = Gtk.Window(application=a)
         state["win"] = win
         # Write PID file and install signal handler.
@@ -498,18 +559,13 @@ def main():
         hbox.set_margin_top(12)
         hbox.set_margin_bottom(12)
 
-        for b in bindings:
-            hbox.append(build_binding_box(b))
-
-        n = len(bindings)
-        item_w = ICON_SIZE + 32
-        width = n * item_w + 24
-        height = ICON_SIZE + 72
-
-        hbox.set_size_request(width, height)
+        width, height = _layout_into(hbox, bindings)
         win.set_child(hbox)
         win.set_default_size(width, height)
         state["place_fn"] = _center_window(win, width, height)
+        state["hbox"] = hbox
+        state["last_mtime"] = _check_files_mtime()
+        state["last_bindings"] = bindings
 
         css = Gtk.CssProvider()
         css.load_from_data(b"""
@@ -562,10 +618,14 @@ def main():
     signal.signal(signal.SIGTERM, on_sigterm)
 
     app.connect("activate", on_activate)
-    # No dbus activation in this command-line invocation, so call on_activate
-    # directly to set up the window. After that, app.run() processes signal
-    # callbacks and the toggle_visibility idle_add.
-    on_activate(app)
+    # Defer the first activation to the GTK main loop's idle phase so the
+    # GApplication::startup signal has been emitted. Calling on_activate
+    # directly here (or before app.run) hits "Gtk-CRITICAL: New application
+    # windows must be added after the GApplication::startup signal has been
+    # emitted", and the GtkApplication state machine is left in a half-
+    # initialized state where app.run([]) returns immediately, which is
+    # why the viewer process used to die right after startup.
+    GLib.idle_add(on_activate, app)
     try:
         app.run([])
     finally:
