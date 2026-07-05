@@ -32,5 +32,32 @@ window_toggle = executable('window-toggle',
     install_dir: join_paths(get_option('prefix'), 'bin')
 )
 
+# Install the GTK4 viewer script alongside the binary.
+# Runtime: PyGObject + GTK4 + libadwaita provided by the host distribution.
+install_data(
+    'window-toggle-viewer',
+    install_dir: join_paths(get_option('prefix'), 'bin'),
+    install_mode: 'rwxr-xr-x',
+)
+
+# Install the dconf registration helper under libexec so uninstall can find it.
+install_data(
+    'scripts/meson-viewer-install.sh',
+    install_dir: join_paths(get_option('prefix'), 'libexec', 'window-toggle'),
+    install_mode: 'rwxr-xr-x',
+)
+install_data(
+    'scripts/meson-viewer-uninstall.sh',
+    install_dir: join_paths(get_option('prefix'), 'libexec', 'window-toggle'),
+    install_mode: 'rwxr-xr-x',
+)
+
+# Run the dconf registration script at install time. The script is
+# skip_if_destdir: false so package builds (with DESTDIR) still get it
+# executed against the real dconf database.
+meson.add_install_script(
+    'scripts/meson-viewer-install.sh',
+)
+
 # Test
 test('basic test', window_toggle)

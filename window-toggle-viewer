@@ -1,0 +1,378 @@
+#!/snap/gnome-46-2404/153/usr/bin/python3.12
+# window-toggle-viewer - GTK4 viewer for all configured bindings.
+# Triggered by Ctrl+Pause (registered to dconf at meson install time).
+# Read-only: displays app + slot bindings as a row of icons, with key and
+# app name as captions. No interaction beyond Esc/close to dismiss.
+
+import os
+import subprocess
+import sys
+import configparser
+
+try:
+    import gi
+    gi.require_version('Gtk', '4.0')
+    gi.require_version('Adw', '1')
+    from gi.repository import Gtk, Adw, Gdk, GdkPixbuf, GLib
+except (ImportError, ValueError) as e:
+    sys.stderr.write(
+        "window-toggle-viewer: PyGObject + GTK4 + libadwaita not available.\n"
+        "Install with: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1\n"
+        f"Underlying error: {e}\n"
+    )
+    sys.exit(1)
+
+WT_BIN = "/usr/local/bin/window-toggle"
+ICON_SIZE = 64
+STATUS_ALIVE = "alive"
+STATUS_DEAD = "dead"
+STATUS_NOT_STARTED = "not-started"
+
+
+def read_app_bindings():
+    xdg = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    path = os.path.join(xdg, "window-toggle", "bindings.json")
+    if not os.path.exists(path):
+        return []
+    out = []
+    cur = {}
+    in_section = False
+    with open(path) as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if line.strip() == "### app_bindings ###":
+                in_section = True
+                continue
+            if not in_section:
+                continue
+            if not line.strip():
+                if cur.get("key") and cur.get("cmd"):
+                    out.append(cur)
+                cur = {}
+                continue
+            if ":" in line:
+                k, _, v = line.partition(":")
+                cur[k.strip()] = v.strip()
+    if cur.get("key") and cur.get("cmd"):
+        out.append(cur)
+    return out
+
+
+def read_slot_bindings():
+    path = "/tmp/window-toggle-config.json"
+    if not os.path.exists(path):
+        return []
+    out = []
+    cur = {}
+    with open(path) as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line.strip():
+                if cur.get("key"):
+                    out.append(cur)
+                cur = {}
+                continue
+            if ":" in line:
+                k, _, v = line.partition(":")
+                cur[k.strip()] = v.strip()
+    if cur.get("key"):
+        out.append(cur)
+    return out
+
+
+def status_for(anchor_xid):
+    if not anchor_xid or anchor_xid == 0:
+        return STATUS_NOT_STARTED
+    try:
+        r = subprocess.run(
+            ["xwininfo", "-id", hex(anchor_xid)],
+            capture_output=True, text=True, timeout=2,
+        )
+        if r.returncode != 0:
+            return STATUS_DEAD
+        for line in r.stdout.splitlines():
+            if "Map State:" in line:
+                if "IsViewable" in line:
+                    return STATUS_ALIVE
+                return STATUS_DEAD
+        return STATUS_DEAD
+    except Exception:
+        return STATUS_DEAD
+
+
+def find_desktop_file(wm_class):
+    if not wm_class:
+        return None
+    dirs = [
+        "/usr/share/applications",
+        os.path.expanduser("~/.local/share/applications"),
+        "/var/lib/flatpak/exports/share/applications",
+        os.path.expanduser("~/.local/share/flatpak/exports/share/applications"),
+    ]
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        try:
+            for name in os.listdir(d):
+                if not name.endswith(".desktop"):
+                    continue
+                p = os.path.join(d, name)
+                try:
+                    cp = configparser.ConfigParser(strict=False)
+                    cp.read(p)
+                    swm = cp.get("Desktop Entry", "StartupWMClass", fallback="")
+                    if swm and swm.lower() == wm_class.lower():
+                        return p
+                except Exception:
+                    continue
+        except OSError:
+            continue
+    return None
+
+
+def icon_paintable_for(name, size=ICON_SIZE):
+    """Return a Gtk.IconPaintable for the given icon name, or None.
+    GTK4 IconPaintable is itself a GdkPaintable, usable directly with
+    Gtk.Image.new_from_paintable. GTK3's info.load_icon() does not
+    exist in PyGObject GTK4 bindings.
+    """
+    if not name:
+        return None
+    theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+    try:
+        return theme.lookup_icon(name, None, size, 1, Gtk.TextDirection.LTR, Gtk.IconLookupFlags(0))
+    except Exception:
+        return None
+
+
+# Backwards-compatible shim: callers expect a paintable, not a pixbuf.
+def icon_from_name(name, size=ICON_SIZE):
+    return icon_paintable_for(name, size)
+
+
+def icon_from_desktop_file(path, size=ICON_SIZE):
+    if not path:
+        return None
+    try:
+        cp = configparser.ConfigParser(strict=False)
+        cp.read(path)
+        icon_name = cp.get("Desktop Entry", "Icon", fallback="")
+        if not icon_name:
+            return None
+        return icon_from_name(icon_name, size)
+    except Exception:
+        return None
+
+
+def fallback_icon(size=ICON_SIZE):
+    theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+    for name in ("application-x-executable", "system-run", "utilities-terminal"):
+        try:
+            info = theme.lookup_icon(name, None, size, 1, Gtk.TextDirection.LTR, Gtk.IconLookupFlags(0))
+            if info:
+                return info  # GTK4: info is the IconPaintable, no load_icon()
+        except Exception:
+            continue
+    return None
+
+
+# Some apps (notably Electron ones) name their desktop file differently
+# from their wm_class and from their actual icon. These aliases map a
+# wm_class (case-insensitive) to the canonical icon name in the system
+# theme.
+_ICON_ALIASES = {
+    "code": "vscode",
+    "code - insiders": "vscode-insiders",
+    "code-insiders": "vscode-insiders",
+    "spotify": "spotify-client",
+}
+
+
+def lookup_icon_for(wm_class, app_name, size=ICON_SIZE):
+    candidates = []
+    if wm_class:
+        candidates.append(wm_class)
+        alias = _ICON_ALIASES.get(wm_class.lower())
+        if alias:
+            candidates.append(alias)
+    if app_name:
+        candidates.append(app_name)
+        alias = _ICON_ALIASES.get(app_name.lower())
+        if alias:
+            candidates.append(alias)
+    for name in candidates:
+        pb = icon_from_name(name, size)
+        if pb:
+            return pb
+    desktop = find_desktop_file(wm_class)
+    if desktop:
+        pb = icon_from_desktop_file(desktop, size)
+        if pb:
+            return pb
+    return fallback_icon(size)
+
+
+def build_shortcut_label(b):
+    mod = b.get("modifiers", "")
+    key = b.get("key", "")
+    return f"{mod}+{key}" if mod else key
+
+
+def build_binding_widgets():
+    widgets = []
+    for a in read_app_bindings():
+        try:
+            anchor = int(a.get("target_window", "0"), 16)
+        except ValueError:
+            anchor = 0
+        widgets.append({
+            "shortcut": build_shortcut_label(a),
+            "label": a.get("cmd", ""),
+            "wm_class": a.get("wm_class", ""),
+            "status": status_for(anchor),
+        })
+    for s in read_slot_bindings():
+        try:
+            anchor = int(s.get("window_id", "0"), 16)
+        except ValueError:
+            anchor = 0
+        widgets.append({
+            "shortcut": build_shortcut_label(s),
+            "label": s.get("window_title") or s.get("window_class", ""),
+            "wm_class": s.get("window_class", ""),
+            "status": status_for(anchor),
+        })
+    return widgets
+
+
+def make_status_decoration(status):
+    if status == STATUS_ALIVE:
+        return "\u25cf", "wt-status-alive"
+    if status == STATUS_DEAD:
+        return "\u25cb", "wt-status-dead"
+    return "\u00b7", "wt-status-notstarted"
+
+
+def build_binding_box(b):
+    icon_paintable = lookup_icon_for(b["wm_class"], b["label"])
+    if icon_paintable:
+        img = Gtk.Image.new_from_paintable(icon_paintable)
+    else:
+        img = Gtk.Image.new_from_icon_name("application-x-executable")
+    img.set_pixel_size(ICON_SIZE)
+
+    inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
+                    halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+    inner.set_margin_top(8)
+    inner.set_margin_bottom(8)
+    inner.set_margin_start(8)
+    inner.set_margin_end(8)
+
+    inner.append(img)
+
+    status_glyph, css_class = make_status_decoration(b["status"])
+    caption = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6,
+                      halign=Gtk.Align.CENTER)
+    glyph_lbl = Gtk.Label(label=status_glyph)
+    glyph_lbl.add_css_class(css_class)
+    glyph_lbl.add_css_class("wt-status-glyph")
+    key_lbl = Gtk.Label(label=b["shortcut"])
+    key_lbl.add_css_class("wt-key")
+    caption.append(glyph_lbl)
+    caption.append(key_lbl)
+    inner.append(caption)
+
+    name_lbl = Gtk.Label(label=b["label"])
+    name_lbl.set_ellipsize(3)
+    name_lbl.set_max_width_chars(20)
+    name_lbl.add_css_class("wt-name")
+    inner.append(name_lbl)
+
+    if b["status"] == STATUS_DEAD:
+        img.add_css_class("wt-dim")
+    elif b["status"] == STATUS_NOT_STARTED:
+        img.add_css_class("wt-dim-more")
+
+    return inner
+
+
+def main():
+    if not os.path.exists(WT_BIN):
+        sys.stderr.write(f"window-toggle-viewer: {WT_BIN} not found\n")
+        sys.exit(1)
+
+    app = Gtk.Application(application_id="org.windowtoggle.viewer", flags=0)
+
+    def on_activate(a):
+        import sys
+        win = Gtk.Window(application=a)
+        win.set_title("window-toggle bindings")
+        win.set_decorated(False)
+        win.set_resizable(False)
+
+        bindings = build_binding_widgets()
+        if not bindings:
+            a.quit()
+            return
+
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        hbox.set_homogeneous(False)
+        hbox.set_margin_start(8)
+        hbox.set_margin_end(8)
+        hbox.set_margin_top(8)
+        hbox.set_margin_bottom(8)
+
+        for b in bindings:
+            hbox.append(build_binding_box(b))
+
+        n = len(bindings)
+        item_w = ICON_SIZE + 24
+        width = n * item_w + 24
+        height = ICON_SIZE + 56
+
+        hbox.set_size_request(width, height)
+        win.set_child(hbox)
+        win.set_default_size(width, height)
+
+        css = Gtk.CssProvider()
+        css.load_from_data(b"""
+            .wt-status-glyph { font-size: 14px; }
+            .wt-key { font-size: 12px; font-weight: bold; }
+            .wt-name { font-size: 10px; opacity: 0.8; }
+            .wt-status-alive { color: #4caf50; }
+            .wt-status-dead { color: #9e9e9e; }
+            .wt-status-notstarted { color: #ff9800; }
+            .wt-dim { opacity: 0.4; }
+            .wt-dim-more { opacity: 0.2; }
+            window { background: alpha(#1e1e1e, 0.92); border-radius: 12px; }
+        """)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+
+
+        def on_key(ctrl, keyval, keycode, state):
+            a.quit()
+            return True
+
+        def on_focus_out(ctrl, *args):
+            a.quit()
+            return False
+
+        key = Gtk.EventControllerKey()
+        key.connect("key-pressed", on_key)
+        win.add_controller(key)
+
+        focus = Gtk.EventControllerFocus()
+        focus.connect("leave", on_focus_out)
+        win.add_controller(focus)
+
+        win.present()
+
+    app.connect("activate", on_activate)
+    app.run([])
+
+
+if __name__ == "__main__":
+    main()
