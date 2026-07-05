@@ -599,6 +599,17 @@ configuration_complete:
     if (config.modifiers[0]) free(config.modifiers[0]);
     if (config.modifiers[1]) free(config.modifiers[1]);
     if (config.key) free(config.key);
+    /* Free per-window title/class strdup's before freeing the array itself.
+     * Each get_window_title / get_window_class returns a fresh strdup, so
+     * we can safely free them here. The selected window's pointers (title
+     * and class) are referenced by config.window_title / config.window_class
+     * but config doesn't own them, so we must free them via the array. */
+    if (window_info) {
+        for (int i = 0; i < count; i++) {
+            free(window_info[i].title);
+            free(window_info[i].class);
+        }
+    }
     free(window_info);
     free_window_list(windows);
     if (grab_succeeded) XUngrabKeyboard(display, CurrentTime);

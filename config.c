@@ -158,9 +158,6 @@ void save_shortcut_mapping(const char *path, const char *shortcut, Window window
         key[sizeof(key) - 1] = '\0';
     }
 
-    /* Debug output */
-    fprintf(stderr, "DEBUG: Parsed shortcut '%s' -> modifiers='%s', key='%s'\n", shortcut, modifiers, key);
-
     FILE *fp = fopen(path, "r");
     if (fp) {
         fclose(fp);
@@ -261,13 +258,8 @@ void save_shortcut_mapping(const char *path, const char *shortcut, Window window
 
         /* Add the new shortcut mapping with slot_id */
         fp = fopen("/tmp/window-toggle-config-temp.json", "a");
-        fprintf(stderr, "  APPEND: fp=%p, modifiers='%s', key='%s'\n", (void*)fp, modifiers, key);
         if (fp) {
-            long pos = ftell(fp);
-            fprintf(stderr, "    ftell before fprintf = %ld\n", pos);
-            int n1 = fprintf(fp, "modifiers: %s\n", modifiers);
-            long pos2 = ftell(fp);
-            fprintf(stderr, "    APPEND modifiers wrote %d bytes, ftell after = %ld\n", n1, pos2);
+            fprintf(fp, "modifiers: %s\n", modifiers);
             fprintf(fp, "key: %s\n", key);
             fprintf(fp, "window_id: 0x%lx\n", window_id);
             fprintf(fp, "window_title: %s\n", window_title);
@@ -308,7 +300,6 @@ void save_shortcut_mapping(const char *path, const char *shortcut, Window window
         /* File doesn't exist, create new file */
         fp = fopen(path, "w");
         if (!fp) return;
-        fprintf(stderr, "DBG else: modifiers='%s' (len=%zu)\n", modifiers, strlen(modifiers));
         fprintf(fp, "modifiers: %s\n", modifiers);
         fprintf(fp, "key: %s\n", key);
         fprintf(fp, "window_id: 0x%lx\n", window_id);
