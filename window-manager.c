@@ -228,6 +228,14 @@ int get_window_state(Display *display, Window window) {
     if (!XGetWindowAttributes(display, window, &attrs)) {
         return STATE_NOT_RUNNING;  /* Window doesn't exist */
     }
+    /* X server can return success for a stale XID whose backing object
+     * already went away. The attributes then report 1x1 0-depth — a
+     * tell that the anchor is pointing at a dead resource. Without this
+     * check, --run-app happily calls minimize_window on a phantom and
+     * the user sees "I pressed Ctrl+F10 but nothing happened". */
+    if (attrs.width < 50 || attrs.height < 50 || attrs.depth == 0) {
+        return STATE_NOT_RUNNING;
+    }
 
     Atom net_wm_state = XInternAtom(display, "_NET_WM_STATE", False);
     Atom net_wm_state_hidden = XInternAtom(display, "_NET_WM_STATE_HIDDEN", False);
