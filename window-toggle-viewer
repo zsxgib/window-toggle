@@ -350,6 +350,19 @@ _ICON_ALIASES = {
     "spotify": "spotify-client",
 }
 
+# Some wm_class values are shared by many different apps (e.g.
+# "X-terminal-emulator" is what gnome-terminal, terminator, konsole,
+# xfce4-terminal, etc. all report), and the icon theme only ships icons
+# for the specific app names, not for the generic class. When the direct
+# lookup fails, try these specific names in order.
+_WM_CLASS_ICON_FALLBACKS = {
+    "X-terminal-emulator": [
+        "terminator", "gnome-terminal", "konsole", "xfce4-terminal",
+        "xfce-terminal", "tilix", "alacritty", "kitty", "foot",
+        "sakura", "urxvt", "xterm", "st",
+    ],
+}
+
 
 def lookup_icon_for(wm_class, app_name, size=ICON_SIZE):
     candidates = []
@@ -367,6 +380,11 @@ def lookup_icon_for(wm_class, app_name, size=ICON_SIZE):
         pb = icon_from_name(name, size)
         if pb:
             return pb
+    if wm_class:
+        for name in _WM_CLASS_ICON_FALLBACKS.get(wm_class, []):
+            pb = icon_from_name(name, size)
+            if pb:
+                return pb
     desktop = find_desktop_file(wm_class)
     if desktop:
         pb = icon_from_desktop_file(desktop, size)
