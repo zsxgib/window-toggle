@@ -158,20 +158,47 @@ def _check_files_mtime():
     return tuple(sigs)
 
 
+def _make_separator():
+    """Vertical bar used to separate app bindings from slot bindings in the
+    viewer popup. 2px wide, 120px tall, with an 8px margin on each side so
+    it does not touch adjacent items. Centered vertically inside the
+    horizontal Box that holds the row of bindings."""
+    sep = Gtk.Box()
+    sep.set_size_request(4, 140)
+    sep.set_valign(Gtk.Align.CENTER)
+    sep.set_hexpand(False)
+    sep.set_vexpand(False)
+    sep.set_margin_start(10)
+    sep.set_margin_end(10)
+    sep.add_css_class("wt-sep")
+    return sep
+
+
 def _layout_into(box, items):
     """Clear the existing children of `box`, then append a freshly built
-    widget for each entry in `items`. Returns (width, height) for the new
-    layout. GTK4 Box has no clear() in PyGObject, so we pop one at a time."""
+    widget for each entry in `items`. Inserts a thin vertical separator at
+    the boundary between the "app" and "slot" sections. Returns
+    (width, height) for the new layout."""
     while True:
         child = box.get_first_child()
         if child is None:
             break
         box.remove(child)
+    prev_kind = None
+    n_items = 0
+    n_seps = 0
     for b in items:
+        kind = b.get("kind", "")
+        if prev_kind == "app" and kind == "slot":
+            box.append(_make_separator())
+            n_seps += 1
         box.append(build_binding_box(b))
-    n = len(items)
+        n_items += 1
+        prev_kind = kind
     item_w = ICON_SIZE + 32
-    width = n * item_w + 24
+    # separator widget itself is 4px + 10+10 margins = 24px wide
+    sep_w = 4 + 20
+    width = n_items * item_w + n_seps * sep_w + 24
     height = ICON_SIZE + 72
     box.set_size_request(width, height)
     return width, height
@@ -411,17 +438,19 @@ def build_binding_widgets():
             "label": a.get("cmd", ""),
             "wm_class": a.get("wm_class", ""),
             "status": status_for(anchor),
+            "kind": "app",
         })
-    for s in read_slot_bindings():
+    for slot in read_slot_bindings():
         try:
-            anchor = int(s.get("window_id", "0"), 16)
+            anchor = int(slot.get("window_id", "0"), 16)
         except ValueError:
             anchor = 0
         widgets.append({
-            "shortcut": build_shortcut_label(s),
-            "label": s.get("window_title") or s.get("window_class", ""),
-            "wm_class": s.get("window_class", ""),
+            "shortcut": build_shortcut_label(slot),
+            "label": slot.get("window_title") or slot.get("window_class", ""),
+            "wm_class": slot.get("window_class", ""),
             "status": status_for(anchor),
+            "kind": "slot",
         })
     return widgets
 
@@ -593,6 +622,7 @@ def main():
             .wt-status-alive { color: #4caf50; }
             .wt-status-dead { color: #cccccc; }
             .wt-status-notstarted { color: #ff9800; }
+            .wt-sep { background-color: rgba(255,255,255,0.75); }
             .wt-dim { opacity: 0.4; }
             .wt-dim-more { opacity: 0.2; }
             window { background: alpha(#1e1e1e, 0.92); color: #ffffff; border-radius: 12px; }
