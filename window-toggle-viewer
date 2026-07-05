@@ -131,21 +131,37 @@ def find_desktop_file(wm_class):
 
 
 def icon_paintable_for(name, size=ICON_SIZE):
-    """Return a Gtk.IconPaintable for the given icon name, or None.
-    GTK4 IconPaintable is itself a GdkPaintable, usable directly with
-    Gtk.Image.new_from_paintable. GTK3's info.load_icon() does not
-    exist in PyGObject GTK4 bindings.
+    """Return a Gdk.Texture for the given icon name, or None.
+
+    GTK4 IconPaintable is a GdkPaintable but in the Yaru theme some
+    app icons (notably the symbolic SVGs used for code / vscode /
+    X-terminal-emulator) paint as missing-image when fed to Gtk.Image
+    without a styling context. We side-step that by loading the icon's
+    underlying file through GdkPixbuf (which decodes PNG/SVG into real
+    pixels) and wrapping the result in a Gdk.Texture.
     """
     if not name:
         return None
     theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+    info = None
     try:
-        return theme.lookup_icon(name, None, size, 1, Gtk.TextDirection.LTR, Gtk.IconLookupFlags(0))
+        info = theme.lookup_icon(name, None, size, 1, Gtk.TextDirection.LTR, Gtk.IconLookupFlags(0))
     except Exception:
         return None
+    if not info:
+        return None
+    f = info.get_file()
+    if f and f.get_path():
+        try:
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_size(f.get_path(), size, size)
+            return Gdk.Texture.new_for_pixbuf(pb)
+        except Exception:
+            pass
+    # No backing file -> caller will keep trying other candidates.
+    return None
 
 
-# Backwards-compatible shim: callers expect a paintable, not a pixbuf.
+# Backwards-compatible shim.
 def icon_from_name(name, size=ICON_SIZE):
     return icon_paintable_for(name, size)
 
