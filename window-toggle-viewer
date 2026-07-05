@@ -655,8 +655,14 @@ def main():
 
 
         def on_key(ctrl, keyval, keycode, state):
-            toggle_visibility()
-            return True
+            # Only Escape dismisses the popup. Any other key (including
+            # Ctrl+Pause / Ctrl+Fx) must fall through to gsd-media-keys
+            # and the application that owns the focus, otherwise the
+            # viewer would silently eat every keystroke while it's open.
+            if keyval == Gdk.KEY_Escape:
+                toggle_visibility()
+                return True
+            return False
 
         def on_focus_out(ctrl, *args):
             toggle_visibility()
@@ -670,7 +676,13 @@ def main():
         focus.connect("leave", on_focus_out)
         win.add_controller(focus)
 
-        state["visible"] = True
+        # Do not flip state["visible"] to True here. The window is just
+        # presented by on_activate, but if a stale SIGUSR1 (queued up
+        # before the daemon was ready, or fired by the gsd-media-keys
+        # "key release" handler on the same physical press that started
+        # us) reaches toggle_visibility right after this point, we want
+        # it to land on the "show" branch, not "hide". Leaving visible
+        # False means the first toggle after startup is always a show.
 
         def on_destroy(*args):
             try:
