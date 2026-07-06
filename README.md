@@ -157,6 +157,12 @@ Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app
 
 ## Changelog
 
+### v1.9.3 (2026-07-06)
+- fix: viewer popup now distinguishes "visible" from "minimized/hidden" from "gone". Previously both hidden and gone windows were rendered the same way, so pressing Ctrl+Fx to minimize a window looked like the key had no effect.
+  - Three states: `started` (green dot, full opacity), `hidden` (gray dot, 40% opacity), `not-started` (orange dot, 25% opacity).
+  - The popup polls every second while open, so closing/minimizing a window via Ctrl+Fx updates the popup in place — no need to close and reopen it.
+- fix: `--clean` now also stops the viewer daemon. Previously `--clean` only cleared dconf shortcuts and the config file, leaving the viewer alive; the next Ctrl+PB press would pop up an empty / stale window.
+
 ### v1.9.1 (2026-07-03)
 - fix: dconf action parameter order (`--key X --run-app` instead of `--run-app --key X`) so the dconf callback actually fires
 - fix: app binding config now lives at `~/.config/window-toggle/bindings.json` (XDG) instead of `/tmp/window-toggle-config.json`, so bindings survive reboot

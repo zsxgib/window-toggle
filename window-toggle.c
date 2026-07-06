@@ -1081,10 +1081,22 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--run-app") == 0) {
             mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.9.2\n");
+            printf("window-toggle v1.9.3\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
+            printf("\n");
+            printf("v1.9.3 主要更新：\n");
+            printf("  - viewer 弹窗状态从两态改三态：\n");
+            printf("    之前 status_for 只把窗口分成 开 / 没 两种，\n");
+            printf("    按 Ctrl+Fx 把它最小化之后 viewer 还显示 在\n");
+            printf("    那里，让人以为按键没生效。现在分三态：\n");
+            printf("    开着（绿圆点 + 不透明）、已隐藏（灰圆点 + 40%% 透明）、\n");
+            printf("    已失效（橙圆点 + 25%% 透明）。弹窗期间每秒轮询一次，\n");
+            printf("    按一下 Ctrl+Fx 之后立刻看见新状态。\n");
+            printf("  - --clean 顺手把 viewer 弹窗进程一起杀掉：\n");
+            printf("    之前 --clean 只清配置和 dconf，viewer 还活着，\n");
+            printf("    下次按 Ctrl+PB 弹出来是空的。\n");
             printf("\n");
             printf("v1.9.2 主要更新：\n");
             printf("  - 修复 --bind-app 启动后 anchor 永远写不上的 bug：\n");

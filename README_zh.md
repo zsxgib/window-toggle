@@ -156,6 +156,12 @@ window-toggle --unbind-app Ctrl+F12
 
 ## 更新日志
 
+### v1.9.3 (2026-07-06)
+- 修复：viewer 弹窗现在分「可见 / 已隐藏 / 已失效」三种状态显示。之前「被最小化」和「anchor 彻底死了」显示成同一种，让人按 Ctrl+Fx 把窗口关掉之后以为按键没起作用。
+  - 三态：started（绿色圆点 + 不透明）、hidden（灰色圆点 + 40% 透明）、not-started（橙色圆点 + 25% 透明）
+  - 弹窗打开期间每秒轮询一次状态，按一下 Ctrl+Fx 关掉窗口会立刻在弹窗里反映新状态，不用关掉再开
+- 修复：`--clean` 现在顺手把 viewer 弹窗进程也一起杀掉。之前 `--clean` 只清 dconf 快捷键和配置文件，viewer 还活着，下次按 Ctrl+PB 会弹出一个空空如也的窗口
+
 ### v1.9.1 (2026-07-03)
 - 修复: dconf action 的参数顺序改为 `--key X --run-app`,使 dconf 回调能真正触发
 - 修复: app binding 配置改为存到 `~/.config/window-toggle/bindings.json`(XDG 路径),重启后保留
