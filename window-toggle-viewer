@@ -129,9 +129,9 @@ def _center_window(win, width, height):
     GLib.idle_add(_place)
     GLib.timeout_add(100, _place)
     return _place
-STATUS_ALIVE = "alive"
-STATUS_DEAD = "dead"
 STATUS_NOT_STARTED = "not-started"
+STATUS_STARTED = "started"
+STATUS_HIDDEN = "hidden"
 
 # Paths to the two config files. Tracked by a periodic mtime check so the
 # viewer can pick up new bindings without being restarted.
@@ -255,6 +255,12 @@ def read_slot_bindings():
 
 
 def status_for(anchor_xid):
+    """三态判定：窗口当前是开着的、被最小化藏起来的、还是已经彻底没了。
+
+    之前只用两态（开 / 死），把"被最小化"和"anchor 死了"混为一谈，
+    导致按 Ctrl+F9 把 terminator 关掉之后，viewer 这一行显示成
+    [anchor: 0x..., dead]，让人误以为"窗口没关掉"。其实是被藏起来了。
+    """
     if not anchor_xid or anchor_xid == 0:
         return STATUS_NOT_STARTED
     try:
@@ -263,15 +269,18 @@ def status_for(anchor_xid):
             capture_output=True, text=True, timeout=2,
         )
         if r.returncode != 0:
-            return STATUS_DEAD
+            # xwininfo 找不到这个 XID → anchor 真的没了
+            return STATUS_NOT_STARTED
         for line in r.stdout.splitlines():
             if "Map State:" in line:
                 if "IsViewable" in line:
-                    return STATUS_ALIVE
-                return STATUS_DEAD
-        return STATUS_DEAD
+                    return STATUS_STARTED
+                # IsUnmapped (被最小化) 或 IsUnviewable (被盖住但还显示)
+                # 都算"被藏起来，按一下键能叫出来"
+                return STATUS_HIDDEN
+        return STATUS_NOT_STARTED
     except Exception:
-        return STATUS_DEAD
+        return STATUS_NOT_STARTED
 
 
 def find_desktop_file(wm_class):
@@ -477,10 +486,10 @@ def build_binding_widgets():
 
 
 def make_status_decoration(status):
-    if status == STATUS_ALIVE:
+    if status == STATUS_STARTED:
         return "\u25cf", "wt-status-alive"
-    if status == STATUS_DEAD:
-        return "\u25cb", "wt-status-dead"
+    if status == STATUS_HIDDEN:
+        return "\u25cb", "wt-status-hidden"
     return "\u00b7", "wt-status-notstarted"
 
 
@@ -519,10 +528,10 @@ def build_binding_box(b):
     name_lbl.add_css_class("wt-name")
     inner.append(name_lbl)
 
-    if b["status"] == STATUS_DEAD:
+    if b["status"] == STATUS_HIDDEN:
         img.add_css_class("wt-dim")
     elif b["status"] == STATUS_NOT_STARTED:
-        img.add_css_class("wt-dim-more")
+        img.add_css_class("wt-dim-most")
 
     return inner
 
@@ -595,6 +604,31 @@ def main():
         # the previous position when a window is hidden and re-shown.
         if state.get("place_fn"):
             state["place_fn"]()
+        # 弹窗打开期间，每秒重算一次每行 status，按 Ctrl+Fx 关闭窗口后
+        # 弹窗内容会立刻反映新状态，而不是要关掉再开一次。
+        if state.get("poll_id") is None:
+            def _poll(*args):
+                box = state.get("hbox")
+                if box is None or not state.get("visible"):
+                    return True
+                changed = False
+                for child in box.get_first_child(),:
+                    pass  # not used; iterate below
+                # 遍历子组件里的所有 binding box
+                cur = box.get_first_child()
+                bindings = state.get("last_bindings", [])
+                bi = 0
+                # 简单做法：状态变了就整体重画一次（绑定数量通常 ≤ 20，开销可忽略）
+                from copy import deepcopy
+                old = [(b["shortcut"], b["status"]) for b in bindings]
+                new_bindings = build_binding_widgets()
+                new = [(b["shortcut"], b["status"]) for b in new_bindings]
+                if old != new:
+                    state["last_bindings"] = new_bindings
+                    w2, h2 = _layout_into(box, new_bindings)
+                    w.set_default_size(w2, h2)
+                return True
+            state["poll_id"] = GLib.timeout_add_seconds(1, _poll)
 
     def on_sigusr1(signum, frame):
         # Called from GTK main loop via GLib.idle_add to be thread-safe.
@@ -641,11 +675,12 @@ def main():
             .wt-key { font-size: 16px; font-weight: bold; color: #ffffff; }
             .wt-name { font-size: 13px; opacity: 0.8; color: #ffffff; }
             .wt-status-alive { color: #4caf50; }
-            .wt-status-dead { color: #cccccc; }
+            .wt-status-hidden { color: #bbbbbb; }
             .wt-status-notstarted { color: #ff9800; }
             .wt-sep { background-color: rgba(255,255,255,0.75); }
             .wt-dim { opacity: 0.4; }
             .wt-dim-more { opacity: 0.2; }
+            .wt-dim-most { opacity: 0.25; }
             window { background: alpha(#1e1e1e, 0.92); color: #ffffff; border-radius: 12px; }
         """)
         Gtk.StyleContext.add_provider_for_display(

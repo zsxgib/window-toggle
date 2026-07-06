@@ -3,3 +3,5 @@ window-toggle
 window-toggle-daemon
 test-keyboard
 build/
+__pycache__/
+build-asan/
