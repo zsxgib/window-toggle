@@ -1157,6 +1157,23 @@ int main(int argc, char *argv[]) {
 void clean_mode_with_path(const char *config_path) {
     fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== Window Toggle Clean Mode ===" COLOR_RESET "\n");
 
+    /* --clean 顺带关掉 viewer 弹窗进程（用 SIGTERM 让它优雅退出，
+     * 否则 --clean 之后 viewer 还会读到一个"已经清掉"的配置文件，
+     * 显示空弹窗或干脆死循环找文件）。 */
+    {
+        FILE *vfp = fopen("/tmp/window-toggle-viewer.pid", "r");
+        if (vfp) {
+            long vpid = 0;
+            if (fscanf(vfp, "%ld", &vpid) == 1 && vpid > 0) {
+                if (kill((pid_t)vpid, SIGTERM) == 0) {
+                    fprintf(stderr, COLOR_GREEN "✓ Stopped viewer daemon (pid %ld)" COLOR_RESET "\n", vpid);
+                }
+            }
+            fclose(vfp);
+            unlink("/tmp/window-toggle-viewer.pid");
+        }
+    }
+
     /* Clean up window-toggle related shortcuts by name matching */
     fprintf(stderr, COLOR_YELLOW "Cleaning window-toggle shortcuts (by name matching)..." COLOR_RESET "\n");
     int cleaned_count = 0;
@@ -1290,6 +1307,7 @@ void clean_mode_with_path(const char *config_path) {
     fprintf(stderr, COLOR_YELLOW "Cleaning up temporary files..." COLOR_RESET "\n");
     unlink("/tmp/window-toggle-state");
     unlink("/tmp/window-toggle-active");
+    unlink("/tmp/window-toggle-viewer.pid");
     fprintf(stderr, COLOR_GREEN "✓ Clean complete!" COLOR_RESET "\n");
 }
 
