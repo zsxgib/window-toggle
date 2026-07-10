@@ -284,6 +284,99 @@ void launch_application(const char *app_name) {
     }
 }
 
+int is_window_on_top(Display *display, Window window) {
+    /* target 窗口是普通窗口里"最顶上"那个吗?
+     *
+     * _NET_CLIENT_LIST_STACKING 是 bottom→top 的 stacking 顺序。
+     * 越靠后 = 视觉上越靠前。mutter 把 _NET_WM_WINDOW_TYPE_DESKTOP
+     * 永远放最前 (stack 头部),普通窗口怎么 raise 也越不过去 —— 所以
+     * 普通窗口的"最顶"位置是 stack 末端,跳过 DESKTOP / DOCK / SPLASH
+     * 之后的最后一个。
+     *
+     * 实现:从 stack 末尾倒着扫,跳过系统窗口,第一个普通窗口如果不是
+     * target,target 就被压在底下。 */
+    Window root = DefaultRootWindow(display);
+    Atom stacking = XInternAtom(display, "_NET_CLIENT_LIST_STACKING", False);
+    Atom wm_window_type = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
+    Atom desktop_type = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
+    Atom dock_type = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DOCK", False);
+    Atom splash_type = XInternAtom(display, "_NET_WM_WINDOW_TYPE_SPLASH", False);
+
+    Atom actual_type;
+    int actual_format;
+    unsigned long nitems, bytes_after;
+    unsigned char *data = NULL;
+    if (XGetWindowProperty(display, root, stacking, 0, ~0L, False, XA_WINDOW,
+                           &actual_type, &actual_format,
+                           &nitems, &bytes_after, &data) != Success || !data) {
+        return 0;
+    }
+    Window *list = (Window *)data;
+    int on_top = 0;
+    /* stack 是 bottom→top,从后往前扫找普通窗口里的最顶 */
+    long i;
+    for (i = (long)nitems - 1; i >= 0; i--) {
+        Window w = list[i];
+        Atom a_type;
+        int a_format;
+        unsigned long a_nitems, a_after;
+        unsigned char *a_data = NULL;
+        if (XGetWindowProperty(display, w, wm_window_type, 0, ~0L, False, XA_ATOM,
+                               &a_type, &a_format, &a_nitems, &a_after, &a_data) == Success
+            && a_data) {
+            Atom *types = (Atom *)a_data;
+            int is_system = 0;
+            for (unsigned long j = 0; j < a_nitems; j++) {
+                if (types[j] == desktop_type || types[j] == dock_type
+                    || types[j] == splash_type) {
+                    is_system = 1;
+                    break;
+                }
+            }
+            XFree(a_data);
+            if (is_system) continue;  /* 系统窗口跳过,看更前面的 */
+        }
+        /* 这是 stack 里最顶的普通窗口,看是不是 target */
+        on_top = (w == window);
+        break;
+    }
+    XFree(data);
+    return on_top;
+}
+
+void raise_window(Display *display, Window window) {
+    /* 窗口被压在底下时把它抢到焦点并让用户视觉上看到它跳到前面。
+     * mutter 的策略:
+     *   - _NET_ACTIVE_WINDOW source=1 (app request): mutter 只给焦点不 raise,看起来无效果
+     *   - _NET_ACTIVE_WINDOW source=2 (pager): mutter 会同时 raise + 给焦点
+     *   - XRaiseWindow 单独发不行,mutter 把它当作 "app 想偷焦点" 拒绝
+     *   - XSetInputFocus 单独发也不行,mutter focus-stealing 防护拦下
+     * 三连 (XRaiseWindow + source=2 + XSetInputFocus) 实际只需要 source=2 就够了
+     * —— 多发的两条反而会触发 mutter 防护,焦点夺不到。所以只发 source=2。 */
+    fprintf(stderr, "Raising window: 0x%lx\n", window);
+    fflush(stderr);
+
+    Window root = DefaultRootWindow(display);
+    Atom net_active = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
+
+    XEvent event;
+    memset(&event, 0, sizeof(event));
+    event.xclient.type = ClientMessage;
+    event.xclient.send_event = True;
+    event.xclient.window = window;
+    event.xclient.message_type = net_active;
+    event.xclient.format = 32;
+    event.xclient.data.l[0] = 2;            /* source = pager,mutter 同时 raise + 给焦点 */
+    event.xclient.data.l[1] = CurrentTime;
+    event.xclient.data.l[2] = 0;
+    XSendEvent(display, root, False,
+               SubstructureRedirectMask | SubstructureNotifyMask, &event);
+    XFlush(display);
+    /* mutter 处理 _NET_ACTIVE_WINDOW 是异步的,睡眠 50ms 让它完成 raise/激活,
+     * 否则调用方立刻读 _NET_ACTIVE_WINDOW 会读到旧的焦点窗口。 */
+    usleep(50 * 1000);
+}
+
 void minimize_window(Display *display, Window window) {
     fprintf(stderr, "Minimizing window: 0x%lx\n", window);
     fflush(stderr);
@@ -293,6 +386,10 @@ void minimize_window(Display *display, Window window) {
 }
 
 void activate_window(Display *display, Window window) {
+    /* STATE_HIDDEN → STATE_VISIBLE 的恢复动作。
+     * mutter 的策略: _NET_ACTIVE_WINDOW source=1 只给焦点不 raise,
+     * source=2 (pager) 才会同时 raise + 给焦点 + unmappped 也能恢复显示。
+     * 用 source=2 是为了让"按一次 F1 看到窗口"的需求成立。 */
     fprintf(stderr, "Activating window: 0x%lx\n", window);
     fflush(stderr);
 
@@ -307,14 +404,17 @@ void activate_window(Display *display, Window window) {
     event.xclient.window = window;
     event.xclient.message_type = net_active_window;
     event.xclient.format = 32;
-    event.xclient.data.l[0] = 2;
-    event.xclient.data.l[1] = 0;
+    event.xclient.data.l[0] = 2;            /* source = pager,mutter 同时 raise + 给焦点 */
+    event.xclient.data.l[1] = CurrentTime;
     event.xclient.data.l[2] = 0;
 
     XSendEvent(display, root, False,
                SubstructureRedirectMask | SubstructureNotifyMask,
                &event);
     XSync(display, False);
+    /* mutter 处理 _NET_ACTIVE_WINDOW 是异步的,等 50ms 让它完成 raise/激活。
+     * 否则调用方立刻读 _NET_ACTIVE_WINDOW 会读到旧焦点。 */
+    usleep(50 * 1000);
 }
 
 WindowState read_state_file() {

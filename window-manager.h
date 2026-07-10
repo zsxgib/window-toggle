@@ -20,6 +20,8 @@ int get_window_state(Display *display, Window window);
 void launch_application(const char *app_name);
 void minimize_window(Display *display, Window window);
 void activate_window(Display *display, Window window);
+void raise_window(Display *display, Window window);
+int is_window_on_top(Display *display, Window window);
 
 /* State management */
 WindowState read_state_file();

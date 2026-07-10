@@ -683,16 +683,24 @@ void run_mode_with_path(const char *config_path, const char *key_param) {
         if (config) free_config(config);
         return;
     }
+    /* 区分 "被压在底下" vs "在最前":mutter 只标 _NET_WM_STATE_HIDDEN,
+     * 不告诉用户 z-order。被压的窗口 minimize 后用户看不到,所以只 raise。 */
+    int was_on_top = is_window_on_top(display, target_window);
     if (window_state == STATE_HIDDEN) {
         activate_window(display, target_window);
         write_active_window(target_window);
         write_state_file(STATE_VISIBLE);
         fprintf(stderr, COLOR_GREEN "Window activated" COLOR_RESET "\n");
-    } else {
+    } else if (was_on_top) {
+        /* 可见且在最前 → minimize,toggle 的"藏起来"那半 */
         minimize_window(display, target_window);
         write_active_window(target_window);
         write_state_file(STATE_HIDDEN);
         fprintf(stderr, COLOR_GREEN "Window minimized" COLOR_RESET "\n");
+    } else {
+        /* 可见但被压在底下 → 只 raise,不 minimize,让用户看到窗口跳出来 */
+        raise_window(display, target_window);
+        fprintf(stderr, COLOR_GREEN "Window raised" COLOR_RESET "\n");
     }
     XCloseDisplay(display);
     if (config) free_config(config);
@@ -1081,10 +1089,24 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--run-app") == 0) {
             mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.9.3\n");
+            printf("window-toggle v1.9.4\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
+            printf("\n");
+            printf("v1.9.4 主要更新：\n");
+            printf("  - 按快捷键时区分三种状态做不同动作:\n");
+            printf("    之前只看「藏起来没」和「是不是 visible」两种,visible 就直接\n");
+            printf("    最小化。如果窗口 visible 但被压在别的窗口底下,按下去用户\n");
+            printf("    什么都看不到 —— 窗口只是从底下被藏到了最小化,视觉上没变化。\n");
+            printf("    现在多查一眼窗口是不是在普通窗口最顶,如果在最顶就 minimize\n");
+            printf("    (老行为),被压就只把它抢到焦点放到最前 (raise),用户看到\n");
+            printf("    窗口跳出来。F1/F3/F6 和 Ctrl+F10/F11/F12 都按这个改。\n");
+            printf("  - 把窗口抢到最前改用另一种方式发消息:\n");
+            printf("    mutter 收到普通 app 的抢焦点请求时只给焦点不动 stacking,\n");
+            printf("    收到「桌面切换器」(pager) 那种请求才同时抢焦点+提到最前。\n");
+            printf("    之前用的是 app 那种,现在改用 pager 那种,所以按下去确实\n");
+            printf("    能看到窗口跳出来。\n");
             printf("\n");
             printf("v1.9.3 主要更新：\n");
             printf("  - viewer 弹窗状态从两态改三态：\n");
@@ -1842,13 +1864,19 @@ void run_app_mode_with_path(const char *config_path, const char *key_arg) {
         return;
     }
 
-    /* Step 3: anchored window exists → toggle (minimize / activate). */
+    /* Step 3: anchored window exists → 三路 toggle
+     *   - hidden → activate
+     *   - visible & 在最顶 → minimize
+     *   - visible & 被压在底下 → raise (不 minimize,否则用户看不到反应) */
     if (state == STATE_HIDDEN) {
         activate_window(display, (Window)anchor);
         fprintf(stderr, COLOR_GREEN "Window activated\n" COLOR_RESET);
-    } else {
+    } else if (is_window_on_top(display, (Window)anchor)) {
         minimize_window(display, (Window)anchor);
         fprintf(stderr, COLOR_GREEN "Window minimized\n" COLOR_RESET);
+    } else {
+        raise_window(display, (Window)anchor);
+        fprintf(stderr, COLOR_GREEN "Window raised\n" COLOR_RESET);
     }
     XCloseDisplay(display);
 }

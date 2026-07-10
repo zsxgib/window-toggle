@@ -157,6 +157,10 @@ Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app
 
 ## Changelog
 
+### v1.9.4 (2026-07-10)
+- fix: pressing the hotkey now distinguishes "window is the topmost normal window" from "window is visible but buried under other windows". Previously both cases hit the minimize branch, so a hotkey press on a buried window did nothing the user could see (mutter only marks `_NET_WM_STATE_HIDDEN`, not z-order). Now the hotkey first asks whether the window is on top of normal windows; if it is, minimize (unchanged); if it is buried, raise it to the front instead. Affects F1/F3/F6 (slot) and Ctrl+F10/F11/F12 (app binding).
+- fix: raising a window now sends `_NET_ACTIVE_WINDOW` with `source=2` (pager) instead of `source=1` (app). Mutter honors the pager source by raising + giving focus; for app source it only gives focus and leaves the window where it was.
+
 ### v1.9.3 (2026-07-06)
 - fix: viewer popup now distinguishes "visible" from "minimized/hidden" from "gone". Previously both hidden and gone windows were rendered the same way, so pressing Ctrl+Fx to minimize a window looked like the key had no effect.
   - Three states: `started` (green dot, full opacity), `hidden` (gray dot, 40% opacity), `not-started` (orange dot, 25% opacity).
