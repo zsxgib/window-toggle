@@ -1026,8 +1026,28 @@ void show_config(const char *config_path) {
             }
         }
     }
+    /* 抽出每个 shortcut 字面里的 F 数字 (F1, F12 这种), 没有 F 键的排最后。
+     * 排序在 group 内做, 让 F1 排在 F12 前面而不是按文件里读到的顺序。 */
+    int sort_key(const char *s) {
+        if (!s) return 9999;
+        const char *p = strstr(s, "F");
+        if (!p || p[1] < '0' || p[1] > '9') return 9999;
+        int n = 0;
+        for (const char *q = p + 1; *q >= '0' && *q <= '9'; q++) {
+            n = n * 10 + (*q - '0');
+        }
+        return n;
+    }
+    int cmp_shortcut(const void *a, const void *b) {
+        const ShortcutInfo *A = a, *B = b;
+        return sort_key(A->shortcut) - sort_key(B->shortcut);
+    }
     /* Display groups */
     for (int g = 0; g < group_count; g++) {
+        /* 对这个 group 内部的 item 排序 (in-place 不影响其它 group)。 */
+        if (groups[g].count > 1) {
+            qsort(groups[g].items, groups[g].count, sizeof(ShortcutInfo), cmp_shortcut);
+        }
         fprintf(stderr, "\n" COLOR_BOLD COLOR_YELLOW "%s" COLOR_RESET " (%d window%s):\n",
                 groups[g].class_name,
                 groups[g].count,
