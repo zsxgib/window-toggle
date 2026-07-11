@@ -1952,7 +1952,32 @@ void run_app_mode_with_path(const char *config_path, const char *key_arg) {
     if (anchor != 0) {
         state = get_window_state(display, (Window)anchor);
         if (state == STATE_NOT_RUNNING) {
-            fprintf(stderr, COLOR_YELLOW "Anchored window 0x%lx is gone, will relaunch\n" COLOR_RESET, anchor);
+            fprintf(stderr, COLOR_YELLOW "Anchored window 0x%lx is gone\n" COLOR_RESET, anchor);
+            /* Anchor 没活着, 但是其它同名窗口可能已经在跑 (单实例 app 看起来这样:
+             * 上次 anchor 指向的窗口被关了, 新开一个 nautilus/code 用新 XID, 
+             * 老 anchor XID 被回收给别的进程而我们这边以为是死了)。
+             * 直接扫一遍匹配 wm_class 的活窗口, 找到的话重新锚定它就直接 toggle,
+             * 不用 fork+exec 再启动一个 (单实例 app 再 exec 也白搭)。 */
+            unsigned long alive = find_window_by_class(display, wc);
+            if (alive && alive != anchor) {
+                fprintf(stderr, COLOR_GREEN "Re-anchoring to existing window 0x%lx\n" COLOR_RESET, alive);
+                app_binding_update_anchor(config_path, bound_mod, bound_key, alive);
+                /* 同步 sibling binding 的 anchor, 跟新启动走一样的逻辑 */
+                AppBinding *rsibs = NULL; int rsc = 0;
+                app_binding_load(config_path, &rsibs, &rsc);
+                for (int rsi = 0; rsi < rsc; rsi++) {
+                    const AppBinding *rsb = &rsibs[rsi];
+                    if (!rsb->cmd || strcmp(rsb->cmd, cmd) != 0) continue;
+                    if (!rsb->wm_class || strcmp(rsb->wm_class, wc) != 0) continue;
+                    if (strcmp(rsb->modifiers ? rsb->modifiers : "", bound_mod) == 0 &&
+                        strcmp(rsb->key ? rsb->key : "", bound_key) == 0) continue;
+                    app_binding_update_anchor(config_path, rsb->modifiers ? rsb->modifiers : "",
+                                              rsb->key ? rsb->key : "", alive);
+                }
+                app_binding_free(rsibs, rsc);
+                anchor = alive;
+                state = get_window_state(display, (Window)alive);
+            }
         }
     }
 
