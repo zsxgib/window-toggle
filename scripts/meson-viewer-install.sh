@@ -33,40 +33,48 @@ if [ ! -x "${VIEWER}" ]; then
     exit 0
 fi
 
-EXISTING=""
-for i in $(seq 0 99); do
-    name=$(dconf read "${DCONF_BASE}/custom${i}/name" 2>/dev/null || true)
-    if [ "${name}" = "'${BINDING_NAME}'" ]; then
-        EXISTING="${i}"
-        break
-    fi
-done
+# 三条 binding (Ctrl+Pause / Super+Pause / Alt+Pause) 让任意一个 modifier 都能弹 viewer。
+# 每条用独立 slot, 在 custom-keybindings 列表里加一次。如果已有同名 slot,
+# 直接写 binding 字段 (复用, 不浪费槽)。
+declare -a KEYS=("<Primary>Pause" "<Super>Pause" "<Alt>Pause")
+declare -a SLOTS=()
 
-if [ -z "${EXISTING}" ]; then
+for KEY in "${KEYS[@]}"; do
+    SLOT=""
+    # 找一个 name=viewer 且 cmd=viewer 且 binding=KEY 的现成 slot, 直接复用
     for i in $(seq 0 99); do
         name=$(dconf read "${DCONF_BASE}/custom${i}/name" 2>/dev/null || true)
-        if [ -z "${name}" ] || [ "${name}" = "''" ]; then
-            EXISTING="${i}"
+        binding=$(dconf read "${DCONF_BASE}/custom${i}/binding" 2>/dev/null || true)
+        if [ "${name}" = "'${BINDING_NAME}'" ] && [ "${binding}" = "'${KEY}'" ]; then
+            SLOT="${i}"
             break
         fi
     done
-fi
+    # 没有现成 viewer slot 就开个新空槽
+    if [ -z "${SLOT}" ]; then
+        for i in $(seq 0 99); do
+            name=$(dconf read "${DCONF_BASE}/custom${i}/name" 2>/dev/null || true)
+            if [ -z "${name}" ] || [ "${name}" = "''" ]; then
+                SLOT="${i}"
+                break
+            fi
+        done
+    fi
+    if [ -z "${SLOT}" ]; then
+        echo "meson-viewer-install: no free dconf custom-keybinding slot for ${KEY}" >&2
+        continue
+    fi
+    SLOTS+=("${SLOT}")
+    SLOT_PATH="${DCONF_BASE}/custom${SLOT}"
+    dconf write "${SLOT_PATH}/name" "'${BINDING_NAME}'"
+    dconf write "${SLOT_PATH}/command" "'${VIEWER}'"
+    dconf write "${SLOT_PATH}/binding" "'${KEY}'"
+    LIST=$(dconf read "${DCONF_BASE}" 2>/dev/null || echo "@as []")
+    case "${LIST}" in
+        *"${SLOT_PATH}/"*) ;;
+        "@as []"|"") dconf write "${DCONF_BASE}" "['${SLOT_PATH}/']" ;;
+        *) dconf write "${DCONF_BASE}" "${LIST%]}, '${SLOT_PATH}/']" ;;
+    esac
+done
 
-if [ -z "${EXISTING}" ]; then
-    echo "meson-viewer-install: no free dconf custom-keybinding slot" >&2
-    exit 0
-fi
-
-SLOT_PATH="${DCONF_BASE}/custom${EXISTING}"
-dconf write "${SLOT_PATH}/name" "'${BINDING_NAME}'"
-dconf write "${SLOT_PATH}/command" "'${VIEWER}'"
-dconf write "${SLOT_PATH}/binding" "'${BINDING_KEY}'"
-
-LIST=$(dconf read "${DCONF_BASE}" 2>/dev/null || echo "@as []")
-case "${LIST}" in
-    *"${SLOT_PATH}/"*) ;;
-    "@as []"|"") dconf write "${DCONF_BASE}" "['${SLOT_PATH}/']" ;;
-    *) dconf write "${DCONF_BASE}" "${LIST%]}, '${SLOT_PATH}/']" ;;
-esac
-
-echo "meson-viewer-install: registered ${BINDING_KEY} -> ${VIEWER} (slot custom${EXISTING})"
+echo "meson-viewer-install: registered viewer for ${#SLOTS[@]} modifier(s) -> ${VIEWER}"
