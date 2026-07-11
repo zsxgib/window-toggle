@@ -654,17 +654,47 @@ def main():
             a.quit()
             return
 
+        # 让 Alt+Tab / 任务栏 / dock 看到 window-toggle 图标,
+        # 而不是 generic 图标。set_icon_name 走 hicolor 图标主题,
+        # 装好的 SVG/PNG 会自动匹配。
+        win.set_icon_name("window-toggle")
+
+        # header: 左侧 logo + 右侧 "window-toggle bindings" 标题,
+        # 给 Alt+Tab 进来的人一个一眼能认的标识。
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        header.set_halign(Gtk.Align.CENTER)
+        header.set_margin_start(12)
+        header.set_margin_end(12)
+        header.set_margin_top(10)
+        header.set_margin_bottom(4)
+        header.add_css_class("wt-header")
+
+        header_icon = Gtk.Image.new_from_icon_name("window-toggle")
+        header_icon.set_pixel_size(28)
+        header.append(header_icon)
+
+        header_title = Gtk.Label(label="window-toggle bindings")
+        header_title.add_css_class("wt-header-title")
+        header.append(header_title)
+
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         hbox.set_homogeneous(False)
         hbox.set_margin_start(12)
         hbox.set_margin_end(12)
-        hbox.set_margin_top(12)
+        hbox.set_margin_top(4)
         hbox.set_margin_bottom(12)
 
+        # 用 vbox 装 header + hbox
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        vbox.append(header)
+        vbox.append(hbox)
+
         width, height = _layout_into(hbox, bindings)
-        win.set_child(hbox)
-        win.set_default_size(width, height)
-        state["place_fn"] = _center_window(win, width, height)
+        # 总高 = header 高 + hbox 高 + vbox padding
+        total_h = height + 48
+        win.set_child(vbox)
+        win.set_default_size(width, total_h)
+        state["place_fn"] = _center_window(win, width, total_h)
         state["hbox"] = hbox
         state["last_mtime"] = _check_files_mtime()
         state["last_bindings"] = bindings
@@ -672,6 +702,9 @@ def main():
         css = Gtk.CssProvider()
         css.load_from_data(b"""
             .wt-status-glyph { font-size: 18px; color: #ffffff; }
+            .wt-header-title { font-size: 14px; font-weight: bold; color: #ffffff; }
+            .wt-header { background-color: rgba(255,255,255,0.06); border-bottom: 1px solid rgba(255,255,255,0.12); border-top-left-radius: 12px; border-top-right-radius: 12px; }
+
             .wt-key { font-size: 16px; font-weight: bold; color: #ffffff; }
             .wt-name { font-size: 13px; opacity: 0.8; color: #ffffff; }
             .wt-status-alive { color: #4caf50; }
@@ -710,6 +743,38 @@ def main():
         focus = Gtk.EventControllerFocus()
         focus.connect("leave", on_focus_out)
         win.add_controller(focus)
+
+        # 设 WM_CLASS 让 Alt+Tab / dock / 任务栏找到 window-toggle 图标。
+        # 默认 GTK 从 argv[0] (= python3.12) 推 WM_CLASS,所以 Alt+Tab
+        # 显示的是 Python 图标。XSetClassHint 改 res_name + res_class。
+        try:
+            gi.require_version("GdkX11", "4.0")
+            from gi.repository import GdkX11
+            import ctypes as _ct
+            _libx11 = _ct.CDLL("libX11.so.6", use_errno=True)
+            class _XClassHint(_ct.Structure):
+                _fields_ = [("res_name", _ct.c_char_p),
+                            ("res_class", _ct.c_char_p)]
+            _libx11.XOpenDisplay.restype = _ct.c_void_p
+            _libx11.XOpenDisplay.argtypes = [_ct.c_char_p]
+            _libx11.XSetClassHint.restype = _ct.c_int
+            _libx11.XSetClassHint.argtypes = [_ct.c_void_p, _ct.c_ulong,
+                                              _ct.POINTER(_XClassHint)]
+            _x11 = GdkX11.X11Display.get_default()
+            _dpy = _libx11.XOpenDisplay(None)
+            # res_name 和 res_class 都设成 "window-toggle",这样 mutter Alt+Tab
+            # / 任务栏 / dock 按 res_class 找图标时,会找到 data/icons/hicolor/
+            # apps/window-toggle.{svg,png} (用 icon 名 "window-toggle")。
+            _hint = _XClassHint(b"window-toggle", b"window-toggle")
+            # 拿窗口 XID: 先 realize 窗口让 surface 存在
+            win.realize()
+            _surface = win.get_surface()
+            if _surface is not None:
+                _xid = GdkX11.X11Surface.get_xid(_surface)
+                _libx11.XSetClassHint(_dpy, _xid, _ct.byref(_hint))
+                _libx11.XFlush(_dpy)
+        except Exception as _e:
+            sys.stderr.write(f"window-toggle-viewer: WM_CLASS set failed: {_e}\n")
 
         # Do not flip state["visible"] to True here. The window is just
         # presented by on_activate, but if a stale SIGUSR1 (queued up
