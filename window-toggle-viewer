@@ -306,6 +306,10 @@ def find_desktop_file(wm_class):
                     swm = cp.get("Desktop Entry", "StartupWMClass", fallback="")
                     if swm and swm.lower() == wm_class.lower():
                         return p
+                    # 也匹配文件名 (codium.desktop 里的 codium 与 StartumWMClass=VSCodium 写的不一致)
+                    base = name[:-len(".desktop")].lower()
+                    if base == wm_class.lower():
+                        return p
                 except Exception:
                     continue
         except OSError:
@@ -383,6 +387,8 @@ _ICON_ALIASES = {
     "code": "vscode",
     "code - insiders": "vscode-insiders",
     "code-insiders": "vscode-insiders",
+    "codium": "vscodium",
+    "vscodium": "vscodium",
     "spotify": "spotify-client",
 }
 

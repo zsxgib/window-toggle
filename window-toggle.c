@@ -793,7 +793,8 @@ void start_mode_with_path(const char *config_path) {
     }
 }
 void show_config(const char *config_path) {
-    /* App bindings (XDG) shown first so they are visible even when slot config is absent. */
+    /* App bindings (XDG) shown first. Use the merged (Ctrl(S+A)+Fx) format
+     * so a single app+Fx trio prints one row instead of three. */
     {
         char xdg_path[1024];
         app_binding_xdg_path(xdg_path, sizeof(xdg_path));
@@ -803,26 +804,60 @@ void show_config(const char *config_path) {
             fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== App Bindings (%d, from %s) ===" COLOR_RESET "\n", count, xdg_path);
             Display *disp = XOpenDisplay(NULL);
             if (disp) { XSync(disp, False); XSetErrorHandler(silent_xerror_handler); }
-            for (int i = 0; i < count; i++) {
-                const char *m = list[i].modifiers ? list[i].modifiers : "";
-                const char *k = list[i].key ? list[i].key : "?";
-                const char *c = list[i].cmd ? list[i].cmd : "?";
-                const char *wc = list[i].wm_class ? list[i].wm_class : "?";
-                const char *status = "not-started";
-                if (list[i].target_window != 0 && disp) {
-                    XWindowAttributes attrs;
-                    if (XGetWindowAttributes(disp, (Window)list[i].target_window, &attrs))
-                        status = "alive";
-                    else
-                        status = "dead";
-                } else if (list[i].target_window != 0) {
-                    status = "anchored";
+            qsort(list, count, sizeof(AppBinding), _show_binding_cmp);
+            int i = 0;
+            while (i < count) {
+                const char *gcmd = list[i].cmd ? list[i].cmd : "?";
+                const char *gwc  = list[i].wm_class ? list[i].wm_class : "?";
+                const char *gkey = list[i].key ? list[i].key : "?";
+                int j = i;
+                while (j < count &&
+                       strcmp(list[j].cmd ? list[j].cmd : "", gcmd) == 0 &&
+                       strcmp(list[j].wm_class ? list[j].wm_class : "", gwc) == 0 &&
+                       strcmp(list[j].key ? list[j].key : "", gkey) == 0) j++;
+
+                unsigned long anchor = 0;
+                int has_ctrl = 0, has_super = 0, has_alt = 0, has_other = 0;
+                for (int k = i; k < j; k++) {
+                    const AppBinding *b = &list[k];
+                    if (b->target_window != 0 && anchor == 0) anchor = b->target_window;
+                    const char *m = b->modifiers ? b->modifiers : "";
+                    if (strcmp(m, "Ctrl") == 0)        has_ctrl = 1;
+                    else if (strcmp(m, "Super") == 0)  has_super = 1;
+                    else if (strcmp(m, "Alt") == 0)    has_alt = 1;
+                    else                                has_other = 1;
                 }
+
+                const char *status = "not-started";
+                if (anchor != 0 && disp) {
+                    XWindowAttributes attrs;
+                    if (XGetWindowAttributes(disp, (Window)anchor, &attrs)) status = "alive";
+                    else status = "dead";
+                } else if (anchor != 0) status = "anchored";
+
                 char shortcut[128];
-                snprintf(shortcut, sizeof(shortcut), "%s%s%s",
-                         m[0] ? m : "", m[0] ? "+" : "", k);
+                if (has_ctrl && has_super && has_alt && !has_other)
+                    snprintf(shortcut, sizeof(shortcut), "Ctrl(S+A)+%s", gkey);
+                else if (has_ctrl && has_super && !has_alt && !has_other)
+                    snprintf(shortcut, sizeof(shortcut), "Ctrl+S+%s", gkey);
+                else if (has_ctrl && has_alt && !has_super && !has_other)
+                    snprintf(shortcut, sizeof(shortcut), "Ctrl+A+%s", gkey);
+                else if (has_super && has_alt && !has_ctrl && !has_other)
+                    snprintf(shortcut, sizeof(shortcut), "Super+Alt+%s", gkey);
+                else if (has_ctrl && !has_super && !has_alt && !has_other)
+                    snprintf(shortcut, sizeof(shortcut), "Ctrl+%s", gkey);
+                else {
+                    int pos = 0;
+                    for (int k = i; k < j; k++) {
+                        const char *m = list[k].modifiers ? list[k].modifiers : "";
+                        if (m[0]) pos += snprintf(shortcut + pos, sizeof(shortcut) - pos, "%s%s", pos ? " / " : "", m);
+                        pos += snprintf(shortcut + pos, sizeof(shortcut) - pos, "%s%s", m[0] ? "+" : "", gkey);
+                    }
+                }
+
                 fprintf(stderr, "  " COLOR_BOLD "%s" COLOR_RESET "  →  %s (%s)  [anchor: 0x%lx, %s]\n",
-                        shortcut, c, wc, list[i].target_window, status);
+                        shortcut, gcmd, gwc, anchor, status);
+                i = j;
             }
             if (disp) XCloseDisplay(disp);
             app_binding_free(list, count);
@@ -1635,6 +1670,42 @@ void bind_app_mode_with_path(const char *config_path, const char *key_arg,
         mod_list[mod_count++] = user_modifiers;
     }
 
+    /* mutter 默认 grab 了一些 Alt+Fx 组合 (begin-move / begin-resize), 物理键按下去
+     * key event 被 mutter 截走, gsd-media-keys 拿不到, window-toggle 不会触发。
+     * 要让 Alt+F7/F8 也能用, 提前把 mutter 那条清空, 末尾再 kill gsd-media-keys 让它重抓。
+     * 硬编码这张表 (mutter 默认值), 不在用户已经清过的情况下重复执行。 */
+    static const struct { const char *fx; const char *wm_action; } mutter_takeovers[] = {
+        { "F7", "begin-move"   },
+        { "F8", "begin-resize" },
+    };
+    int needs_kick = 0;
+    for (size_t i = 0; i < sizeof(mutter_takeovers)/sizeof(mutter_takeovers[0]); i++) {
+        if (strcmp(key, mutter_takeovers[i].fx) != 0) continue;
+        /* 只有 Alt 系列会被 mutter 抓. 含 Alt 的 modifier 都需要让路。 */
+        int has_alt = (strstr(user_modifiers, "Alt") != NULL) || user_modifiers[0] == '\0';
+        if (!has_alt) continue;
+        /* 看 gsettings 当前是不是还指着 Alt+Fx 默认绑定 (用户清过的就不用再动)。 */
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "gsettings get org.gnome.desktop.wm.keybindings %s 2>/dev/null",
+            mutter_takeovers[i].wm_action);
+        FILE *gp = popen(buf, "r");
+        char line[256] = {0};
+        if (gp) { if (fgets(line, sizeof(line), gp)) {} ; pclose(gp); }
+        int already_clear = (strstr(line, "@as []") != NULL || strstr(line, "['']") != NULL);
+        if (already_clear) continue;
+        /* 清空 mutter 那条, X server 把 grab 让出来。 */
+        fprintf(stderr, COLOR_YELLOW "  mutter 默认 grab 了 Alt+%s (%s), 抢占中\n" COLOR_RESET,
+                mutter_takeovers[i].fx, mutter_takeovers[i].wm_action);
+        char set_cmd[256];
+        snprintf(set_cmd, sizeof(set_cmd),
+            "gsettings set org.gnome.desktop.wm.keybindings %s \"@as []\" 2>/dev/null",
+            mutter_takeovers[i].wm_action);
+        int rc = system(set_cmd);
+        if (rc == 0) needs_kick = 1;
+        else fprintf(stderr, COLOR_YELLOW "  gsettings set 失败 (rc=%d), 可能 GNOME 没装, 跳过\n" COLOR_RESET, rc);
+    }
+
     char exec_path[4096];
     get_exec_path(exec_path, sizeof(exec_path));
 
@@ -1676,6 +1747,14 @@ void bind_app_mode_with_path(const char *config_path, const char *key_arg,
             fprintf(stderr, COLOR_RED "  Failed to write app binding to config\n" COLOR_RESET);
             continue;
         }
+    }
+    if (needs_kick) {
+        /* 让 gsd-media-keys 重抓 grab, 这样之前被 mutter 占着的 Alt+Fx 回到它手里。
+         * 进程会在 GNOME session 里自动重起一个。 */
+        fprintf(stderr, COLOR_YELLOW "  重启 gsd-media-keys 让它重新拉 grab...\n" COLOR_RESET);
+        int rc = system("pkill -KILL gsd-media-keys 2>/dev/null");
+        (void)rc;
+        sleep(1);
     }
     if (mod_count > 1) {
         fprintf(stderr, COLOR_GREEN "=== App binding saved. Press Ctrl/Super/Alt + %s to toggle. ===\n" COLOR_RESET, key);
