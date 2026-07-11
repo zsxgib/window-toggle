@@ -41,10 +41,11 @@ static int _show_fx_num(const char *k) {
 
 static int _show_binding_cmp(const void *a, const void *b) {
     const AppBinding *A = a, *B = b;
-    int r = strcmp(A->cmd ? A->cmd : "", B->cmd ? B->cmd : "");
-    if (r != 0) return r;
+    /* 按 F 键数字升序主排序 (F8 在 F12 前面)。同 Fx 按 cmd 字典序稳定 fallback. */
     int ka = _show_fx_num(A->key), kb = _show_fx_num(B->key);
     if (ka != kb) return ka - kb;
+    int r = strcmp(A->cmd ? A->cmd : "", B->cmd ? B->cmd : "");
+    if (r != 0) return r;
     return 0;
 }
 
