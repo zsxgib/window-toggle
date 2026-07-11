@@ -52,6 +52,28 @@ install_data(
     install_mode: 'rwxr-xr-x',
 )
 
+# Install the app icon (SVG source + raster fallbacks for old desktop
+# environments that don't render SVG icons in file managers).
+install_data(
+    'data/icons/hicolor/scalable/apps/window-toggle.svg',
+    install_dir: join_paths(get_option('datadir'), 'icons', 'hicolor', 'scalable', 'apps'),
+)
+install_data(
+    'data/icons/hicolor/128x128/apps/window-toggle.png',
+    install_dir: join_paths(get_option('datadir'), 'icons', 'hicolor', '128x128', 'apps'),
+)
+install_data(
+    'data/icons/hicolor/48x48/apps/window-toggle.png',
+    install_dir: join_paths(get_option('datadir'), 'icons', 'hicolor', '48x48', 'apps'),
+)
+
+# .desktop file so the tool shows up in the application launcher
+# (icon name "window-toggle" resolves to the SVG/PNG above).
+install_data(
+    'data/applications/window-toggle.desktop',
+    install_dir: join_paths(get_option('datadir'), 'applications'),
+)
+
 # Run the dconf registration script at install time. The script is
 # skip_if_destdir: false so package builds (with DESTDIR) still get it
 # executed against the real dconf database.

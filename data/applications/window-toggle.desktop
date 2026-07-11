@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Window Toggle
+GenericName=Window Toggle
+Comment=Show all configured window-toggle bindings
+Exec=window-toggle --show
+Icon=window-toggle
+Terminal=false
+Categories=Utility;
+Keywords=window;toggle;shortcut;keybinding;
