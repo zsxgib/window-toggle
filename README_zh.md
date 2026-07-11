@@ -156,6 +156,12 @@ window-toggle --unbind-app Ctrl+F12
 
 ## 更新日志
 
+### v1.9.5 (2026-07-11)
+- 改动：`--bind-app <Fx> <cmd> <wm_class>` 现在一次注册三条 dconf 快捷键 —— `Ctrl+Fx`、`Super+Fx`、`Alt+Fx`，不再只是一条。按这三条里任意一条都 toggle 同一个窗口，不用在创建时指定修饰符。
+- 改动：带显式修饰符的（像 `Ctrl+Shift+F7`）还是只注册一条，老脚本不受影响。
+- 改动：`--show-app` 和 viewer 弹窗把同一个 app+Fx 的几条合并成一行显示。三件套齐全写 `Ctrl(S+A)+Fx`（Ctrl+Super+Alt），两条写 `Ctrl+S+Fx` 这种，一条时照旧写 `Ctrl+Fx`。viewer 弹窗里这一行的状态圆点按「已启动 > 已隐藏 > 未启动」取最有用那条，避免三条里活着一条也显示成「全死了」。
+- 修复：启动新窗口时把同 cmd+wm_class 的另外两条 binding 的 anchor 也一起覆盖到新窗口 ID。现在三条始终指向同一个 XID，老 anchor 死了也不会留下脏数据。
+
 ### v1.9.4 (2026-07-10)
 - 修复：按快捷键时区分「窗口在最顶」和「窗口 visible 但被压在别的窗口底下」两种情况。之前这两种都走最小化，所以按下去如果窗口本来就被压着，用户什么都看不到 —— mutter 只告诉窗口是不是 `_NET_WM_STATE_HIDDEN`，不告诉 z-order。现在先查一下窗口是不是普通窗口里最顶的那个：在最顶就最小化（老行为不变）；被压着就只把它抢到最前（raise），让用户看到窗口跳出来。F1/F3/F6（slot）和 Ctrl+F10/F11/F12（app binding）都按这个改。
 - 修复：把窗口抢到最前时改用另一种消息（`_NET_ACTIVE_WINDOW` 的 `source=2` 也就是「桌面切换器」那种）。mutter 对普通 app 的抢焦点请求只给焦点不动 stacking；对桌面切换器那种才同时抢焦点+提到最前。改完之后按下去确实能看到窗口跳出来。

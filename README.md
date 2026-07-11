@@ -157,6 +157,11 @@ Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app
 
 ## Changelog
 
+### v1.9.5 (2026-07-11)
+- feat: `--bind-app <Fx> <cmd> <wm_class>` now registers three dconf shortcuts — `Ctrl+Fx`, `Super+Fx`, and `Alt+Fx` — instead of just one. Any of the three modifiers toggles the same window, so the user no longer has to pick one and stick with it. Bindings with an explicit modifier (e.g. `Ctrl+Shift+F7`) still register as a single row, so existing scripts keep working.
+- feat: `--show-app` and the viewer popup now collapse the three siblings of one app into a single row. Modifier set is shown as `Ctrl(S+A)+Fx` (Ctrl + Super + Alt), `Ctrl+S+Fx` (Ctrl + Super only), or `Ctrl+Fx` (one entry), depending on which modifiers are present. Viewer badge state for the merged row is `started > hidden > not-started`, so a row never says "all dead" while one of the three siblings is alive.
+- fix: when launching a fresh app, the new anchor XID is also written back to the `Super+Fx` and `Alt+Fx` siblings (same cmd + wm_class), so all three modifiers always point at the same window. Previously each modifier carried its own anchor that could go stale independently, leading to one of the three stopping to work after the window was closed and reopened.
+
 ### v1.9.4 (2026-07-10)
 - fix: pressing the hotkey now distinguishes "window is the topmost normal window" from "window is visible but buried under other windows". Previously both cases hit the minimize branch, so a hotkey press on a buried window did nothing the user could see (mutter only marks `_NET_WM_STATE_HIDDEN`, not z-order). Now the hotkey first asks whether the window is on top of normal windows; if it is, minimize (unchanged); if it is buried, raise it to the front instead. Affects F1/F3/F6 (slot) and Ctrl+F10/F11/F12 (app binding).
 - fix: raising a window now sends `_NET_ACTIVE_WINDOW` with `source=2` (pager) instead of `source=1` (app). Mutter honors the pager source by raising + giving focus; for app source it only gives focus and leaves the window where it was.

@@ -28,6 +28,26 @@ void run_mode_with_path(const char *config_path, const char *key_param);
 void clean_mode_with_path(const char *config_path);
 void start_mode_with_path(const char *config_path);
 void show_config(const char *config_path);
+
+static int _show_fx_num(const char *k) {
+    if (!k || k[0] != 'F') return 99;
+    int n = 0;
+    for (const char *p = k + 1; *p; p++) {
+        if (*p < '0' || *p > '9') return 99;
+        n = n * 10 + (*p - '0');
+    }
+    return n;
+}
+
+static int _show_binding_cmp(const void *a, const void *b) {
+    const AppBinding *A = a, *B = b;
+    int r = strcmp(A->cmd ? A->cmd : "", B->cmd ? B->cmd : "");
+    if (r != 0) return r;
+    int ka = _show_fx_num(A->key), kb = _show_fx_num(B->key);
+    if (ka != kb) return ka - kb;
+    return 0;
+}
+
 void bind_app_mode_with_path(const char *config_path, const char *key, const char *cmd, const char *wm_class);
 void unbind_app_mode_with_path(const char *config_path, const char *key);
 void show_app_mode_with_path(const char *config_path);
@@ -798,7 +818,7 @@ void show_config(const char *config_path) {
                 } else if (list[i].target_window != 0) {
                     status = "anchored";
                 }
-                char shortcut[64];
+                char shortcut[128];
                 snprintf(shortcut, sizeof(shortcut), "%s%s%s",
                          m[0] ? m : "", m[0] ? "+" : "", k);
                 fprintf(stderr, "  " COLOR_BOLD "%s" COLOR_RESET "  →  %s (%s)  [anchor: 0x%lx, %s]\n",
@@ -1089,10 +1109,25 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--run-app") == 0) {
             mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.9.4\n");
+            printf("window-toggle v1.9.5\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
+            printf("\n");
+            printf("v1.9.5 主要更新：\n");
+            printf("  - --bind-app 一次写三条快捷键 (Ctrl/Super/Alt)：\n");
+            printf("    之前 --bind-app F11 code Code 只在 dconf 里加 Ctrl+F11 一条，\n");
+            printf("    想加 Super+F11 还得再跑一次，麻烦。裸 Fx 现在直接扩成\n");
+            printf("    Ctrl、Super、Alt 三条，按哪个都 toggle 同一个窗口。\n");
+            printf("    带修饰符（比如 Ctrl+Shift+F7）还是只注册一条，\n");
+            printf("    保持和老 binding 兼容。\n");
+            printf("  - --show-app 和 viewer 弹窗把同一个 app+Fx 的三条合并显示：\n");
+            printf("    三件套齐全时合并写成 Ctrl(S+A)+Fx，两条时写 Ctrl+S+Fx，\n");
+            printf("    一条时照旧 Ctrl+Fx。viewer 状态圆点按\n");
+            printf("    已启动 > 已隐藏 > 未启动 取最有用那条，避免看上去全错配。\n");
+            printf("  - 锚点共享：同 cmd+wm_class 的三条 binding 现在共享同一个 XID：\n");
+            printf("    启动新窗口时另外两条的 anchor 一起覆盖到新窗口 ID，\n");
+            printf("    避免老 anchor 死了之后三条互相指向不同 ID。\n");
             printf("\n");
             printf("v1.9.4 主要更新：\n");
             printf("  - 按快捷键时区分三种状态做不同动作:\n");
@@ -1577,8 +1612,8 @@ void bind_app_mode_with_path(const char *config_path, const char *key_arg,
         fprintf(stderr, "  e.g. --bind-app Ctrl+Alt+F12 nautilus org.gnome.Nautilus\n");
         return;
     }
-    char modifiers[64] = "", key[32] = "";
-    if (parse_shortcut(key_arg, modifiers, sizeof(modifiers), key, sizeof(key)) != 0) {
+    char user_modifiers[64] = "", key[32] = "";
+    if (parse_shortcut(key_arg, user_modifiers, sizeof(user_modifiers), key, sizeof(key)) != 0) {
         fprintf(stderr, COLOR_RED "Invalid key spec: %s\n" COLOR_RESET, key_arg);
         return;
     }
@@ -1587,32 +1622,68 @@ void bind_app_mode_with_path(const char *config_path, const char *key_arg,
         return;
     }
 
+    /* 不带修饰键的 key 默认对 Ctrl/Super/Alt 三个修饰键各注册一条 binding。
+     * 三条 share 同一个 anchor XID, 任意按一个都切到同一个窗口。
+     * 用户明确写了修饰键 (例如 "Ctrl+Shift+F11") 按用户写的来, 只注册一条。 */
+    const char *mod_list[4];
+    int mod_count = 0;
+    if (user_modifiers[0] == '\0') {
+        mod_list[mod_count++] = "Ctrl";
+        mod_list[mod_count++] = "Super";
+        mod_list[mod_count++] = "Alt";
+    } else {
+        mod_list[mod_count++] = user_modifiers;
+    }
+
     char exec_path[4096];
     get_exec_path(exec_path, sizeof(exec_path));
-    char cmdkey[64];
-    shortcut_pair_to_dconf(modifiers, key,
-                           (char[256]){0}, 0,  /* discard binding */
-                           cmdkey, sizeof(cmdkey));
-    char action[8192];
-    snprintf(action, sizeof(action), "%s --key %s --run-app", exec_path, cmdkey);
 
     fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== Binding application to %s ===" COLOR_RESET "\n", key_arg);
     fprintf(stderr, "  cmd:      %s\n", cmd_arg);
     fprintf(stderr, "  wm_class: %s\n", class_arg);
-    fprintf(stderr, "  action:   %s\n", action);
 
-    if (register_dconf_app(modifiers, key, action) < 0) {
-        fprintf(stderr, COLOR_RED "Failed to register dconf shortcut\n" COLOR_RESET);
-        return;
-    }
-    fprintf(stderr, COLOR_GREEN "✓ dconf shortcut registered\n" COLOR_RESET);
+    for (int mi = 0; mi < mod_count; mi++) {
+        const char *modifiers = mod_list[mi];
+        char cmdkey[64];
+        shortcut_pair_to_dconf(modifiers, key,
+                               (char[256]){0}, 0,
+                               cmdkey, sizeof(cmdkey));
+        char action[8192];
+        snprintf(action, sizeof(action), "%s --key %s --run-app", exec_path, cmdkey);
 
-    if (app_binding_add(config_path, modifiers, key, cmd_arg, class_arg, 0) != 0) {
-        fprintf(stderr, COLOR_RED "Failed to write app binding to config\n" COLOR_RESET);
-        return;
+        fprintf(stderr, "  [%d/%d] %s+%s -> %s\n", mi + 1, mod_count, modifiers, key, action);
+
+        if (register_dconf_app(modifiers, key, action) < 0) {
+            fprintf(stderr, COLOR_RED "  Failed to register dconf shortcut\n" COLOR_RESET);
+            continue;
+        }
+        fprintf(stderr, COLOR_GREEN "  ok dconf shortcut registered\n" COLOR_RESET);
+
+        /* 看下 (modifiers, key) 这条 binding 是否已经存在, 存在则保留 target_window。
+         * 这样同 app 二次跑 --bind-app 不会把现存 anchor 抹成 0。 */
+        unsigned long anchor = 0;
+        AppBinding *exist_list = NULL; int exist_count = 0;
+        app_binding_load(config_path, &exist_list, &exist_count);
+        const AppBinding *exist = app_binding_find(exist_list, exist_count, modifiers, key);
+        if (exist && exist->target_window != 0) {
+            int cmd_match = (exist->cmd && strcmp(exist->cmd, cmd_arg) == 0);
+            int wc_match  = (exist->wm_class && strcmp(exist->wm_class, class_arg) == 0);
+            if (cmd_match && wc_match) anchor = exist->target_window;
+        }
+        app_binding_free(exist_list, exist_count);
+
+        if (app_binding_add(config_path, modifiers, key, cmd_arg, class_arg, anchor) != 0) {
+            fprintf(stderr, COLOR_RED "  Failed to write app binding to config\n" COLOR_RESET);
+            continue;
+        }
     }
-    fprintf(stderr, COLOR_GREEN "✓ App binding saved. Press %s to launch/toggle.\n" COLOR_RESET, key_arg);
+    if (mod_count > 1) {
+        fprintf(stderr, COLOR_GREEN "=== App binding saved. Press Ctrl/Super/Alt + %s to toggle. ===\n" COLOR_RESET, key);
+    } else {
+        fprintf(stderr, COLOR_GREEN "=== App binding saved. Press %s+%s to toggle. ===\n" COLOR_RESET, user_modifiers, key);
+    }
 }
+
 
 void unbind_app_mode_with_path(const char *config_path, const char *key_arg) {
     char xdg_path[1024];
@@ -1622,21 +1693,36 @@ void unbind_app_mode_with_path(const char *config_path, const char *key_arg) {
         fprintf(stderr, COLOR_RED "Usage: --unbind-app <key>\n" COLOR_RESET);
         return;
     }
-    char modifiers[64] = "", key[32] = "";
-    if (parse_shortcut(key_arg, modifiers, sizeof(modifiers), key, sizeof(key)) != 0) {
+    char user_modifiers[64] = "", key[32] = "";
+    if (parse_shortcut(key_arg, user_modifiers, sizeof(user_modifiers), key, sizeof(key)) != 0) {
         fprintf(stderr, COLOR_RED "Invalid key spec: %s\n" COLOR_RESET, key_arg);
         return;
     }
-    if (unregister_dconf_app(modifiers, key) == 0)
-        fprintf(stderr, COLOR_GREEN "✓ Removed dconf shortcut\n" COLOR_RESET);
-    else
-        fprintf(stderr, COLOR_YELLOW "No matching dconf shortcut found (config entry may still be removed)\n" COLOR_RESET);
 
-    if (app_binding_remove(config_path, modifiers, key) == 0)
-        fprintf(stderr, COLOR_GREEN "✓ Removed app binding from config\n" COLOR_RESET);
-    else
-        fprintf(stderr, COLOR_YELLOW "No matching app binding in config\n" COLOR_RESET);
+    /* 不带修饰键时, 默认同时删 Ctrl/Super/Alt 三条 binding。
+     * 用户明确写了修饰键, 只删那一条。 */
+    const char *mod_list[4];
+    int mod_count = 0;
+    if (user_modifiers[0] == '\0') {
+        mod_list[mod_count++] = "Ctrl";
+        mod_list[mod_count++] = "Super";
+        mod_list[mod_count++] = "Alt";
+    } else {
+        mod_list[mod_count++] = user_modifiers;
+    }
+
+    for (int mi = 0; mi < mod_count; mi++) {
+        const char *modifiers = mod_list[mi];
+        if (unregister_dconf_app(modifiers, key) == 0)
+            fprintf(stderr, COLOR_GREEN "  [%d/%d] removed dconf shortcut for %s+%s\n" COLOR_RESET, mi + 1, mod_count, modifiers, key);
+        else
+            fprintf(stderr, COLOR_YELLOW "  [%d/%d] no dconf shortcut for %s+%s\n" COLOR_RESET, mi + 1, mod_count, modifiers, key);
+
+        if (app_binding_remove(config_path, modifiers, key) == 0)
+            fprintf(stderr, COLOR_GREEN "  [%d/%d] removed config entry for %s+%s\n" COLOR_RESET, mi + 1, mod_count, modifiers, key);
+    }
 }
+
 
 void show_app_mode_with_path(const char *config_path) {
     char xdg_path[1024];
@@ -1650,33 +1736,84 @@ void show_app_mode_with_path(const char *config_path) {
         app_binding_free(list, count);
         return;
     }
+
     Display *display = XOpenDisplay(NULL);
     if (display) { XSync(display, False); XSetErrorHandler(silent_xerror_handler); }
+
     fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== App Bindings (%d) ===" COLOR_RESET "\n", count);
-    for (int i = 0; i < count; i++) {
-        const char *m = list[i].modifiers ? list[i].modifiers : "";
-        const char *k = list[i].key ? list[i].key : "?";
-        const char *c = list[i].cmd ? list[i].cmd : "?";
-        const char *wc = list[i].wm_class ? list[i].wm_class : "?";
+
+    /* 按 (cmd, key) 排序, 让 (cmd, key) 三条相邻, 后面的 group 算法才能合 Ctrl+Super+Alt */
+    qsort(list, count, sizeof(AppBinding), _show_binding_cmp);
+
+    int i = 0;
+    while (i < count) {
+        const char *gcmd = list[i].cmd ? list[i].cmd : "?";
+        const char *gkey = list[i].key ? list[i].key : "?";
+        int j = i;
+        while (j < count &&
+               strcmp(list[j].cmd ? list[j].cmd : "", gcmd) == 0 &&
+               strcmp(list[j].key ? list[j].key : "", gkey) == 0) {
+            j++;
+        }
+
+        unsigned long anchor = 0;
+        int has_ctrl = 0, has_super = 0, has_alt = 0, has_other = 0;
+        for (int k = i; k < j; k++) {
+            const AppBinding *b = &list[k];
+            if (b->target_window != 0 && anchor == 0) anchor = b->target_window;
+            const char *m = b->modifiers ? b->modifiers : "";
+            if (strcmp(m, "Ctrl") == 0)      has_ctrl = 1;
+            else if (strcmp(m, "Super") == 0) has_super = 1;
+            else if (strcmp(m, "Alt") == 0)  has_alt = 1;
+            else                              has_other = 1;
+        }
+
         const char *status = "not-started";
-        if (list[i].target_window != 0 && display) {
+        if (anchor != 0 && display) {
             XWindowAttributes attrs;
-            if (XGetWindowAttributes(display, (Window)list[i].target_window, &attrs))
+            if (XGetWindowAttributes(display, (Window)anchor, &attrs))
                 status = "alive";
             else
                 status = "dead";
-        } else if (list[i].target_window != 0) {
+        } else if (anchor != 0) {
             status = "anchored";
         }
-        char shortcut[64];
-        snprintf(shortcut, sizeof(shortcut), "%s%s%s",
-                 m[0] ? m : "", m[0] ? "+" : "", k);
-        fprintf(stderr, "  " COLOR_BOLD "%s" COLOR_RESET "  →  %s (%s)  [anchor: 0x%lx, %s]\n",
-                shortcut, c, wc, list[i].target_window, status);
+
+        char shortcut[128];
+        if (has_ctrl && has_super && has_alt && !has_other) {
+            snprintf(shortcut, sizeof(shortcut), "Ctrl(S+A)+%s", gkey);
+        } else if (has_ctrl && has_super && !has_alt && !has_other) {
+            snprintf(shortcut, sizeof(shortcut), "Ctrl+S+%s", gkey);
+        } else if (has_ctrl && has_alt && !has_super && !has_other) {
+            snprintf(shortcut, sizeof(shortcut), "Ctrl+A+%s", gkey);
+        } else if (has_super && has_alt && !has_ctrl && !has_other) {
+            snprintf(shortcut, sizeof(shortcut), "Super+Alt+%s", gkey);
+        } else {
+            /* fallback: 把每条 modifier+key 用 / 串起来 */
+            char buf[256] = "";
+            for (int k = i; k < j; k++) {
+                char piece[64];
+                const char *m = list[k].modifiers ? list[k].modifiers : "";
+                snprintf(piece, sizeof(piece), "%s%s%s", m[0] ? m : "", m[0] ? "+" : "", list[k].key ? list[k].key : "?");
+                if (buf[0]) snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), "/");
+                snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), "%s", piece);
+            }
+            snprintf(shortcut, sizeof(shortcut), "%s", buf);
+        }
+
+        fprintf(stderr, COLOR_BOLD "\n%s" COLOR_RESET "\n", gcmd);
+        fprintf(stderr, "  " COLOR_BOLD "%s" COLOR_RESET "   [anchor: 0x%lx, %s]\n",
+                shortcut, anchor, status);
+
+        i = j;
     }
+    fprintf(stderr, "\n");
+
     if (display) XCloseDisplay(display);
     app_binding_free(list, count);
 }
+
+
 
 /* Snapshot the current _NET_CLIENT_LIST. Returns a malloc'd array of
  * Window XIDs terminated by 0, or NULL on error. Used to tell newly
@@ -1859,6 +1996,22 @@ void run_app_mode_with_path(const char *config_path, const char *key_arg) {
         }
         fprintf(stderr, COLOR_GREEN "Anchoring to new window 0x%lx\n" COLOR_RESET, found);
         app_binding_update_anchor(config_path, bound_mod, bound_key, found);
+        /* 把同 cmd/wm_class 的其他 modifier binding 也设成同一个 anchor XID。
+         * 这样 Ctrl+Fx / Super+Fx / Alt+Fx 任意一个按下去都 toggle 同一个窗口。
+         * 把所有 modifier 都强制更新, 这样老 anchor 死了时, 老 binding 也不会指向死 ID。 */
+        AppBinding *siblings = NULL; int sc = 0;
+        app_binding_load(config_path, &siblings, &sc);
+        for (int si = 0; si < sc; si++) {
+            const AppBinding *sb = &siblings[si];
+            if (!sb->cmd || strcmp(sb->cmd, cmd) != 0) continue;
+            if (!sb->wm_class || strcmp(sb->wm_class, wc) != 0) continue;
+            /* 跳过自己 (run_app_mode_with_path 已经 update_anchor 自己这条) */
+            if (strcmp(sb->modifiers ? sb->modifiers : "", bound_mod) == 0 &&
+                strcmp(sb->key ? sb->key : "", bound_key) == 0) continue;
+            app_binding_update_anchor(config_path, sb->modifiers ? sb->modifiers : "",
+                                      sb->key ? sb->key : "", found);
+        }
+        app_binding_free(siblings, sc);
         /* New window is visible by default — do not toggle. */
         XCloseDisplay(display);
         return;

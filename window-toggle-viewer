@@ -451,20 +451,92 @@ def _sort_key(b):
     return (kind_rank, mod_count, fn)
 
 
+def _app_group_shortcut(mods):
+    """把一组 modifier 列表 ('Ctrl', 'Super', 'Alt', ...) 压缩成展示侧的字面写法。
+    Ctrl+Super+Alt 三件套全在就写 'Ctrl(S+A)+Fx', 缺哪个就写 'Ctrl+S+Fx' / 'Ctrl+A+Fx' 等。"""
+    has_ctrl = "Ctrl" in mods
+    has_super = "Super" in mods
+    has_alt = "Alt" in mods
+    has_only_csa = set(mods).issubset({"Ctrl", "Super", "Alt", ""})
+    # 兜底: modifier 不全是 Ctrl/Super/Alt 时, 走 build_shortcut_label 那种 "Modifier+Key" 串
+    if not has_only_csa or "" in mods:
+        return None  # caller 要 fallback
+    if has_ctrl and has_super and has_alt:
+        return "Ctrl(S+A)"
+    if has_ctrl and has_super:
+        return "Ctrl+S"
+    if has_ctrl and has_alt:
+        return "Ctrl+A"
+    if has_super and has_alt:
+        return "Super+Alt"
+    if has_ctrl:
+        return "Ctrl"
+    if has_super:
+        return "Super"
+    if has_alt:
+        return "Alt"
+    return None
+
+
+def _status_rank(s):
+    return {"started": 0, "hidden": 1, "not-started": 2}.get(s, 3)
+
+
 def build_binding_widgets():
     widgets = []
+    # 先把同一 (cmd, wm_class, key) 的 binding 合成一条, shortcut 写 Ctrl(S+A)+Fx 这种格式
+    from collections import OrderedDict
+    grouped = OrderedDict()
     for a in read_app_bindings():
+        anchor_hex = a.get("target_window", "0")
         try:
-            anchor = int(a.get("target_window", "0"), 16)
+            anchor = int(anchor_hex, 16)
         except ValueError:
             anchor = 0
+        status = status_for(anchor)
+        key = a.get("key", "")
+        cmd = a.get("cmd", "")
+        wm = a.get("wm_class", "")
+        gkey = (cmd, wm, key)
+        if gkey not in grouped:
+            grouped[gkey] = {
+                "mods": [],
+                "anchors": [],
+                "statuses": [],
+                "cmd": cmd,
+                "wm": wm,
+                "key": key,
+            }
+        grouped[gkey]["mods"].append(a.get("modifiers", ""))
+        grouped[gkey]["anchors"].append(anchor)
+        grouped[gkey]["statuses"].append(status)
+
+    for (cmd, wm, key), grp in grouped.items():
+        mods = grp["mods"]
+        anchors = grp["anchors"]
+        statuses = grp["statuses"]
+        # 状态: 三个 modifier 共享, 取最显眼的 (rank 最小)
+        best_idx = min(range(len(statuses)), key=lambda i: _status_rank(statuses[i]))
+        anchor_for_status = anchors[best_idx]
+        status = statuses[best_idx]
+
+        compact = _app_group_shortcut(mods)
+        if compact is not None:
+            shortcut_text = compact + "+" + key
+        else:
+            # fallback: 把每条 modifier+key 用 "/" 连
+            shortcut_text = " / ".join(
+                build_shortcut_label({"modifiers": m, "key": key}) for m in mods
+            )
+
         widgets.append({
-            "shortcut": build_shortcut_label(a),
-            "modifiers": a.get("modifiers", ""),
-            "key": a.get("key", ""),
-            "label": a.get("cmd", ""),
-            "wm_class": a.get("wm_class", ""),
-            "status": status_for(anchor),
+            "shortcut": shortcut_text,
+            "modifiers": ",".join(mods),
+            "key": key,
+            "label": cmd,
+            "wm_class": wm,
+            "status": status,
+            "anchor": anchor_for_status,
             "kind": "app",
         })
     for slot in read_slot_bindings():
@@ -479,6 +551,7 @@ def build_binding_widgets():
             "label": slot.get("window_title") or slot.get("window_class", ""),
             "wm_class": slot.get("window_class", ""),
             "status": status_for(anchor),
+            "anchor": anchor,
             "kind": "slot",
         })
     widgets.sort(key=_sort_key)
