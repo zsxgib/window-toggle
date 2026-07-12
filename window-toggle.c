@@ -1165,10 +1165,18 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--run-app") == 0) {
             mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.9.5\n");
+            printf("window-toggle v1.9.6\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
+            printf("\n");
+            printf("v1.9.6 主要更新：\n");
+            printf("  - --clean 范围扩大到三类 (slot / app binding / viewer)：\n");
+            printf("    之前 --clean 只清掉 slot 那条 dconf shortcut,其它两类\n");
+            printf("    (--bind-app 注册的、meson install 自动注册的 viewer) 都\n");
+            printf("    留着,看上去像没清干净。现在三类一并清掉,顺便把 dconf\n");
+            printf("    数组里残留的空 slot 路径也剪了。bindings.json 文件保留,\n");
+            printf("    但里面的 ### app_bindings ### 段清空。\n");
             printf("\n");
             printf("v1.9.5 主要更新：\n");
             printf("  - --bind-app 一次写三条快捷键 (Ctrl/Super/Alt)：\n");
@@ -1302,6 +1310,7 @@ void clean_mode_with_path(const char *config_path) {
     /* Clean up window-toggle related shortcuts by name matching */
     fprintf(stderr, COLOR_YELLOW "Cleaning window-toggle shortcuts (by name matching)..." COLOR_RESET "\n");
     int cleaned_count = 0;
+    int cleaned_slot = 0, cleaned_app = 0, cleaned_viewer = 0;
 
     for (int i = 0; i < 100; i++) {
         /* Read name field */
@@ -1323,11 +1332,16 @@ void clean_mode_with_path(const char *config_path) {
                     name_stripped[--len] = '\0';
                 }
 
-                /* 只清 slot 系的 dconf 快捷键（name 严格等于 'window-toggle'）。
-                 * app binding 系的快捷键 name 是 'window-toggle-app'，
-                 * 由 --unbind-app / bindings.json 单独管理，不该被 --clean
-                 * 误删。 */
-                if (strcmp(name_stripped, "window-toggle") == 0) {
+                /* 清掉所有属于 window-toggle 的快捷键（三类）:
+                 *   - "window-toggle"          slot 系 (--configure 注册)
+                 *   - "window-toggle-app"      app 系 (--bind-app 注册)
+                 *   - "window-toggle-viewer"   viewer 自动注册
+                 * 一律对照 (而后 --unbind-app 仍可单独删某条 app binding) */
+                const char *name_kind = NULL;
+                if (strcmp(name_stripped, "window-toggle") == 0)            name_kind = "slot";
+                else if (strcmp(name_stripped, "window-toggle-app") == 0)    name_kind = "app";
+                else if (strcmp(name_stripped, "window-toggle-viewer") == 0) name_kind = "viewer";
+                if (name_kind) {
                     /* Build the path to remove from list */
                     char remove_path[256];
                     snprintf(remove_path, sizeof(remove_path), "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/", i);
@@ -1361,7 +1375,10 @@ void clean_mode_with_path(const char *config_path) {
                     }
 
                     if (result == 0) {
-                        fprintf(stderr, COLOR_GREEN "  ✓ Cleaned custom%d: %s" COLOR_RESET "\n", i, name_stripped);
+                        if (!strcmp(name_kind, "slot"))   cleaned_slot++;
+                        else if (!strcmp(name_kind, "app"))     cleaned_app++;
+                        else if (!strcmp(name_kind, "viewer"))  cleaned_viewer++;
+                        fprintf(stderr, COLOR_GREEN "  ✓ Cleaned custom%d [%s]: %s" COLOR_RESET "\n", i, name_kind, name_stripped);
                         cleaned_count++;
                     }
                 }
@@ -1375,6 +1392,19 @@ void clean_mode_with_path(const char *config_path) {
         fprintf(stderr, COLOR_YELLOW "No window-toggle shortcuts found." COLOR_RESET "\n");
     } else {
         fprintf(stderr, COLOR_GREEN "\n✓ Cleaned %d window-toggle shortcut(s)" COLOR_RESET "\n", cleaned_count);
+        fprintf(stderr, COLOR_CYAN "  slot=%d  app=%d  viewer=%d" COLOR_RESET "\n",
+                cleaned_slot, cleaned_app, cleaned_viewer);
+    }
+
+    /* dconf 删干净了三类快捷键之后, 配置文件 XDG 端还有一份 app_bindings 段:
+     * 它的 mods/key/cmd/wm_class/anchor 都来自之前 dconf 注册过的 9 条,
+     * 留着会让 --show 仍然打印该 app 的信息（anchor 也可能 stale）,
+     * 也可能误导 --bind-app 重注册同名 binding. 一并清掉, 保留 delim
+     * 不动 slot 段. */
+    char xdg_path[1024];
+    app_binding_xdg_path(xdg_path, sizeof(xdg_path));
+    if (app_binding_clear_all(xdg_path) == 0 && cleaned_app > 0) {
+        fprintf(stderr, COLOR_GREEN "✓ Cleared app_bindings section of %s" COLOR_RESET "\n", xdg_path);
     }
 
     /* Preserve the app_bindings section across --clean; the slot portion is gone. */

@@ -313,6 +313,49 @@ int app_binding_add(const char *config_path, const char *modifiers, const char *
     return 0;
 }
 
+/* Wipe all app bindings from the config. Keeps the rest of the file (slot
+ * section) and the ### app_bindings ### delimiter so existing slot data and
+ * the slot parser's stop-marker remain valid. Returns 0 on success, including
+ * the no-op case where the file does not exist or has no app_bindings section. */
+int app_binding_clear_all(const char *config_path) {
+    if (!config_path) return -1;
+    FILE *in = fopen(config_path, "r");
+    if (!in) return 0; /* nothing to clear */
+
+    char tmp_path[1024];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.app.tmp", config_path);
+    if (ensure_parent_dir(config_path) != 0) { fclose(in); return -1; }
+    FILE *out = fopen(tmp_path, "w");
+    if (!out) { fclose(in); return -1; }
+
+    /* Copy the slot section verbatim up to and including the delimiter line.
+     * If the delimiter is missing, the file has no app_bindings section;
+     * leave the file untouched and exit cleanly. */
+    long sect = find_section_start(in);
+    if (sect < 0) {
+        rewind(in);
+        char line[8192];
+        while (fgets(line, sizeof(line), in)) fputs(line, out);
+        fclose(in); fclose(out);
+        rename(tmp_path, config_path);
+        return 0;
+    }
+    rewind(in);
+    long copied = 0;
+    char line[8192];
+    while (copied < sect && fgets(line, sizeof(line), in)) {
+        fputs(line, out);
+        copied = ftell(in);
+    }
+    fclose(in);
+
+    /* Re-emit the delimiter so the slot parser still stops here on reload. */
+    fputs("### app_bindings ###\n", out);
+    fclose(out);
+    rename(tmp_path, config_path);
+    return 0;
+}
+
 int app_binding_remove(const char *config_path, const char *modifiers, const char *key) {
     if (!key) return -1;
     AppBinding *list = NULL; int count = 0;

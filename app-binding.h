@@ -30,6 +30,13 @@ int app_binding_add(const char *config_path, const char *modifiers, const char *
 /* Remove a binding keyed by (modifiers, key). Returns 0 on success. */
 int app_binding_remove(const char *config_path, const char *modifiers, const char *key);
 
+/* Wipe all app bindings (the ### app_bindings ### section) while leaving
+ * the slot section and the delimiter intact. Used by --clean so a single
+ * command tears down every shortcut (slot + app binding + viewer) without
+ * leaving dangling config rows. Returns 0 on success, including the no-op
+ * case where the section does not exist. */
+int app_binding_clear_all(const char *config_path);
+
 /* Find binding by (modifiers, key). Returns NULL if not found.
  * modifiers may be NULL or "" to match bare-Fx. */
 const AppBinding *app_binding_find(const AppBinding *list, int count,

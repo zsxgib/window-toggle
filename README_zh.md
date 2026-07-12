@@ -89,7 +89,7 @@ window-toggle --show
 | `--configure` | 为窗口添加新快捷键 |
 | `--run` | 切换窗口（GNOME 快捷键调用） |
 | `--show` | 查看所有已配置的快捷键 |
-| `--clean` | 删除所有快捷键 |
+| `--clean` | 删除所有快捷键（slot / app binding / viewer 三类全清）|
 | `--start` | 清理并启动守护进程 |
 | `--stop` | 停止守护进程 |
 | `--status` | 查看守护进程是否在运行 |
@@ -152,7 +152,7 @@ window-toggle --unbind-app Ctrl+F12
 - 锚定窗口已退出 —— `fork+execlp <cmd>` 启动命令，轮询 `WM_CLASS` 匹配的窗口，把第一个匹配项作为新锚定写入配置。新启动的窗口默认就是可见的，所以不会再 toggle。
 - 多实例：用户手动开第二个相同应用时，绑定**不会**漂移到新窗口，锚定始终是首次启动那一个。
 
-存储：仍在 `/tmp/window-toggle-config.json` 内，以 `### app_bindings ###` 行为段边界。slot 解析在该行停止，互不干扰。`--clean` 会清空 slot 但保留 app 段。
+存储：仍在 `/tmp/window-toggle-config.json` 内，以 `### app_bindings ###` 行为段边界。slot 解析在该行停止，互不干扰。`--clean` 现在会一并清掉 `--bind-app` 注册的快捷键和 `meson install` 自动注册的 viewer 快捷键。`bindings.json` 文件保留，但里面的 `### app_bindings ###` 段清空（slot 段仍然按老逻辑删）。
 
 ## 更新日志
 
@@ -170,7 +170,7 @@ window-toggle --unbind-app Ctrl+F12
 - 修复：viewer 弹窗现在分「可见 / 已隐藏 / 已失效」三种状态显示。之前「被最小化」和「anchor 彻底死了」显示成同一种，让人按 Ctrl+Fx 把窗口关掉之后以为按键没起作用。
   - 三态：started（绿色圆点 + 不透明）、hidden（灰色圆点 + 40% 透明）、not-started（橙色圆点 + 25% 透明）
   - 弹窗打开期间每秒轮询一次状态，按一下 Ctrl+Fx 关掉窗口会立刻在弹窗里反映新状态，不用关掉再开
-- 修复：`--clean` 现在顺手把 viewer 弹窗进程也一起杀掉。之前 `--clean` 只清 dconf 快捷键和配置文件，viewer 还活着，下次按 Ctrl+PB 会弹出一个空空如也的窗口
+- 修复：`--clean` 现在清干净所有 `window-toggle*` 的快捷键：slot binding、`--bind-app` 注册的 binding、以及 `meson install` 自动注册的 viewer binding（Pause / Scroll_Lock / Print）。dconf 数组里残留的空 slot 路径也一并清除。`bindings.json` 文件保留，但里面的 `### app_bindings ###` 段清空，之后要重新用只能再跑 `--bind-app`。
 
 ### v1.9.1 (2026-07-03)
 - 修复: dconf action 的参数顺序改为 `--key X --run-app`,使 dconf 回调能真正触发
@@ -182,7 +182,7 @@ window-toggle --unbind-app Ctrl+F12
 - 新增 `--unbind-app <key>`、`--show-app`、`--run-app`（dconf 回调）
 - 锚定语义：首次启动的窗口被记住，永不漂移
 - 配置：应用绑定存储在 `### app_bindings ###` 段，与 slot 数据隔离
-- `--clean` 保留 app 段；移除单个绑定用 `--unbind-app`
+- `--clean` 现在也会清掉 app 段；只想删单条 app binding 时用 `--unbind-app <Ctrl+Fx>`
 - 为失效锚定的 XID 检查增加静默 XErrorHandler
 
 ### v1.8 (2026-06-02)
