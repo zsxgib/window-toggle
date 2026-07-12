@@ -317,6 +317,60 @@ def find_desktop_file(wm_class):
     return None
 
 
+def _file_icon_paths(name):
+    """Direct file paths for an icon name, in size-preference order.
+
+    Useful when the icon theme has no entry under the given name
+    (common for packages that only ship a /usr/share/pixmaps/<name>.png
+    without installing an hicolor entry). Returns a list of paths that
+    may exist.
+    """
+    paths = []
+    seen = set()
+    # /usr/share/pixmaps first, then hicolor/<size>/apps.
+    bases = ["/usr/share/pixmaps",
+             os.path.expanduser("~/.local/share/pixmaps")]
+    for base in bases:
+        for ext in ("png", "svg", "xpm"):
+            p = os.path.join(base, name + "." + ext)
+            if p not in seen:
+                seen.add(p)
+                paths.append(p)
+    hicolor_d = os.path.expanduser("~/.local/share/icons/hicolor")
+    hicolor_dirs = ["/usr/share/icons/hicolor", hicolor_d]
+    sizes = ("scalable", "1024x1024", "512x512", "256x256",
+             "128x128", "64x64", "48x48", "32x32", "16x16")
+    for base in hicolor_dirs:
+        for sz in sizes:
+            for ext in ("png", "svg"):
+                p = os.path.join(base, sz, "apps", name + "." + ext)
+                if p not in seen:
+                    seen.add(p)
+                    paths.append(p)
+    return paths
+
+
+def _load_pixbuf_file(path, size):
+    try:
+        if path.lower().endswith(".svg") and GdkPixbuf.Pixbuf is not None:
+            # SVG scaling needs special handling: load + scale_to_max.
+            pb = GdkPixbuf.Pixbuf.new_from_file(path)
+            w, h = pb.get_width(), pb.get_height()
+            if w <= 0 or h <= 0:
+                return None
+            if w >= h:
+                nw = size
+                nh = max(1, int(round(h * size / w)))
+            else:
+                nh = size
+                nw = max(1, int(round(w * size / h)))
+            return pb.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
+        pb = GdkPixbuf.Pixbuf.new_from_file_at_size(path, size, size)
+        return pb
+    except Exception:
+        return None
+
+
 def icon_paintable_for(name, size=ICON_SIZE):
     """Return a Gdk.Texture for the given icon name, or None.
 
@@ -326,6 +380,10 @@ def icon_paintable_for(name, size=ICON_SIZE):
     without a styling context. We side-step that by loading the icon's
     underlying file through GdkPixbuf (which decodes PNG/SVG into real
     pixels) and wrapping the result in a Gdk.Texture.
+
+    Also falls back to /usr/share/pixmaps and hicolor/<size>/apps for
+    apps that ship an icon file but never register it with the icon
+    theme (notably VSCodium's vscodium.png).
     """
     if not name:
         return None
@@ -335,16 +393,28 @@ def icon_paintable_for(name, size=ICON_SIZE):
         info = theme.lookup_icon(name, None, size, 1, Gtk.TextDirection.LTR, Gtk.IconLookupFlags(0))
     except Exception:
         return None
-    if not info:
-        return None
-    f = info.get_file()
-    if f and f.get_path():
+    if info:
+        f = info.get_file()
+        if f and f.get_path():
+            pb = _load_pixbuf_file(f.get_path(), size)
+            if pb is not None:
+                try:
+                    return Gdk.Texture.new_for_pixbuf(pb)
+                except Exception:
+                    pass
+    # Theme has no entry for `name` (or its file could not be loaded).
+    # Try direct on-disk locations: useful for icons that live in
+    # /usr/share/pixmaps with no hicolor registration (e.g. vscodium).
+    for p in _file_icon_paths(name):
+        if not os.path.exists(p):
+            continue
+        pb = _load_pixbuf_file(p, size)
+        if pb is None:
+            continue
         try:
-            pb = GdkPixbuf.Pixbuf.new_from_file_at_size(f.get_path(), size, size)
             return Gdk.Texture.new_for_pixbuf(pb)
         except Exception:
-            pass
-    # No backing file -> caller will keep trying other candidates.
+            continue
     return None
 
 
@@ -388,7 +458,6 @@ _ICON_ALIASES = {
     "code - insiders": "vscode-insiders",
     "code-insiders": "vscode-insiders",
     "codium": "vscodium",
-    "vscodium": "vscodium",
     "spotify": "spotify-client",
 }
 
@@ -649,88 +718,124 @@ def main():
     if signal_existing_daemon():
         sys.exit(0)
 
-    app = Gtk.Application(application_id="org.windowtoggle.viewer", flags=0)
+    app = None  # 不使用 Gtk.Application: 跟 snap-python + GTK 4.14 + adw 1.5 一起用,
+    # 它在 startup 信号之前不能构造 Gtk.Window (Gtk-CRITICAL).
+    # 改用 plain Gtk.Window() + GLib.MainLoop.
 
-    state = {"win": None, "visible": False}
+    state = {"win": None, "visible": False, "loop": None}
 
     def toggle_visibility(*args):
-        w = state["win"]
-        if w is None:
-            return
-        if state["visible"]:
-            w.set_visible(False)
-            state["visible"] = False
-            return
-        # About to show: re-read the config files so any binding added
-        # since the last show (or since the viewer started) is reflected.
-        # Cheap if mtime hasn't changed.
-        current = _check_files_mtime()
-        last = state.get("last_mtime", 0)
-        if current != last:
-            state["last_mtime"] = current
-            new_bindings = build_binding_widgets()
-            old_keys = [b.get("label","") + "|" + b.get("shortcut","") for b in state.get("last_bindings", [])]
-            new_keys = [b.get("label","") + "|" + b.get("shortcut","") for b in new_bindings]
-            if old_keys != new_keys:
-                state["last_bindings"] = new_bindings
-                box = state.get("hbox")
-                if box is not None:
-                    w2, h2 = _layout_into(box, new_bindings)
-                    w.set_default_size(w2, h2)
-        w.present()
-        state["visible"] = True
-        # Re-center on every show because mutter does not preserve
-        # the previous position when a window is hidden and re-shown.
-        if state.get("place_fn"):
-            state["place_fn"]()
-        # 弹窗打开期间，每秒重算一次每行 status，按 Ctrl+Fx 关闭窗口后
-        # 弹窗内容会立刻反映新状态，而不是要关掉再开一次。
-        if state.get("poll_id") is None:
-            def _poll(*args):
-                box = state.get("hbox")
-                if box is None or not state.get("visible"):
-                    return True
-                changed = False
-                for child in box.get_first_child(),:
-                    pass  # not used; iterate below
-                # 遍历子组件里的所有 binding box
-                cur = box.get_first_child()
-                bindings = state.get("last_bindings", [])
-                bi = 0
-                # 简单做法：状态变了就整体重画一次（绑定数量通常 ≤ 20，开销可忽略）
-                from copy import deepcopy
-                old = [(b["shortcut"], b["status"]) for b in bindings]
+        # Wrap the whole thing so a stray failure inside one toggle
+        # never tears down the long-lived background viewer process.
+        try:
+            w = state["win"]
+            if w is None:
+                return
+            if state["visible"]:
+                w.set_visible(False)
+                state["visible"] = False
+                return
+            # About to show: re-read the config files so any binding
+            # added since the last show (or since the viewer started)
+            # is reflected. Cheap if mtime hasn't changed.
+            current = _check_files_mtime()
+            last = state.get("last_mtime", 0)
+            if current != last:
+                state["last_mtime"] = current
                 new_bindings = build_binding_widgets()
-                new = [(b["shortcut"], b["status"]) for b in new_bindings]
-                if old != new:
+                old_keys = [b.get("label","") + "|" + b.get("shortcut","") for b in state.get("last_bindings", [])]
+                new_keys = [b.get("label","") + "|" + b.get("shortcut","") for b in new_bindings]
+                if old_keys != new_keys:
                     state["last_bindings"] = new_bindings
-                    w2, h2 = _layout_into(box, new_bindings)
-                    w.set_default_size(w2, h2)
-                return True
-            state["poll_id"] = GLib.timeout_add_seconds(1, _poll)
+                    box = state.get("hbox")
+                    if box is not None:
+                        w2, h2 = _layout_into(box, new_bindings)
+                        w.set_default_size(w2, h2)
+            w.present()
+            state["visible"] = True
+            # Re-center on every show because mutter does not preserve
+            # the previous position when a window is hidden and re-shown.
+            if state.get("place_fn"):
+                state["place_fn"]()
+            # While the popup is open, recompute every row status each
+            # second. Pressing Ctrl+Fx then toggling the popup down
+            # should immediately reflect the new state without closing
+            # and reopening the window manually.
+            if state.get("poll_id") is None:
+                def _poll(*args):
+                    box = state.get("hbox")
+                    if box is None or not state.get("visible"):
+                        return True
+                    # 简单做法：状态变了就整体重画一次（绑定数量通常 ≤ 20，开销可忽略）
+                    old = [(b["shortcut"], b["status"]) for b in state.get("last_bindings", [])]
+                    new_bindings = build_binding_widgets()
+                    new = [(b["shortcut"], b["status"]) for b in new_bindings]
+                    if old != new:
+                        state["last_bindings"] = new_bindings
+                        w2, h2 = _layout_into(box, new_bindings)
+                        w.set_default_size(w2, h2)
+                    return True
+                state["poll_id"] = GLib.timeout_add_seconds(1, _poll)
+        except BaseException:
+            import traceback
+            traceback.print_exc()
 
-    def on_sigusr1(signum, frame):
-        # Called from GTK main loop via GLib.idle_add to be thread-safe.
-        GLib.idle_add(toggle_visibility)
+    state["toggle_pending_src"] = None
+
+    def _do_toggle():
+        state["toggle_pending_src"] = None
+        try:
+            toggle_visibility()
+        except BaseException:
+            import traceback
+            traceback.print_exc()
+        sys.stderr.write("VT:DONE\n"); sys.stderr.flush()
+
+    def on_sigusr1(*args):
+        # Debounce: drop the press while a toggle is already
+        # scheduled. The previously-scheduled toggle runs after a
+        # short delay; this prevents back-to-back set_visible /
+        # present from racing against the compositor and crashing
+        # the GTK main loop.
+        if state.get("toggle_pending_src") is not None:
+            return True
+        def _run():
+            _do_toggle()
+            return False
+        state["toggle_pending_src"] = GLib.timeout_add(100, _run)
+        return True
 
     def on_activate(a):
         # If a previous activate (manual or via dbus) already built the
         # window, do nothing. Otherwise we'd leak an orphan Window.
         if state.get("win") is not None:
             return
-        win = Gtk.Window(application=a)
+        win = Gtk.Window()
         state["win"] = win
         # Write PID file and install signal handler.
         with open(VIEWER_PID_PATH, "w") as f:
             f.write(str(os.getpid()))
-        signal.signal(signal.SIGUSR1, on_sigusr1)
+        # Use GLib.unix_signal_add, NOT Python's signal.signal, when the
+        # GTK main loop is running. Python's signal module runs the
+        # handler synchronously inside the C-level signal trampoline,
+        # which is not safe inside GLib's main loop on this GTK 4.14 /
+        # snap-python combo - the process dies on the first delivery.
+        # GLib.unix_signal_add wires the signal into the main loop and
+        # schedules the callback between event loop iterations.
+        GLib.unix_signal_add(
+            GLib.PRIORITY_DEFAULT,
+            signal.SIGUSR1,
+            on_sigusr1,
+            None,
+        )
         win.set_title("window-toggle")
         win.set_decorated(False)
         win.set_resizable(False)
 
         bindings = build_binding_widgets()
         if not bindings:
-            a.quit()
+            if state.get("loop"):
+                state["loop"].quit()
             return
 
         # 让 Alt+Tab / 任务栏 / dock 看到 window-toggle 图标。
@@ -783,7 +888,11 @@ def main():
             return False
 
         def on_focus_out(ctrl, *args):
-            toggle_visibility()
+            # 不要在这里调 toggle_visibility:
+            #   set_visible(False) (HIDE 分支) 会 emit EventControllerFocus 的 'leave' 信号,
+            #   这会让 toggle_visibility() 进入显示分支 (visible=False 时),
+            #   然后 w.present() 触发 'enter', 再触发 leave... 几轮之内 GTK 主循环 segfault.
+            # 窗口的关闭靠 Esc / SIGUSR1 toggle, 不靠 focus-out.
             return False
 
         key = Gtk.EventControllerKey()
@@ -843,22 +952,26 @@ def main():
         win.connect("destroy", on_destroy)
         win.present()
 
-    def on_sigterm(signum, frame):
-        app.quit()
+    def on_sigterm(*args):
+        if state.get("loop"):
+            state["loop"].quit()
+        return True
 
-    signal.signal(signal.SIGTERM, on_sigterm)
+    GLib.unix_signal_add(
+        GLib.PRIORITY_DEFAULT,
+        signal.SIGTERM,
+        on_sigterm,
+        None,
+    )
 
-    app.connect("activate", on_activate)
-    # Defer the first activation to the GTK main loop's idle phase so the
-    # GApplication::startup signal has been emitted. Calling on_activate
-    # directly here (or before app.run) hits "Gtk-CRITICAL: New application
-    # windows must be added after the GApplication::startup signal has been
-    # emitted", and the GtkApplication state machine is left in a half-
-    # initialized state where app.run([]) returns immediately, which is
-    # why the viewer process used to die right after startup.
-    GLib.idle_add(on_activate, app)
+    # 不使用 Gtk.Application, 改用 GLib.MainLoop.
+    loop = GLib.MainLoop()
+    state["loop"] = loop
+    # startup 已经通过 set_visible(False) 不再需要 (无 Application),
+    # idle_add 在 main loop 第一次 iter 时执行, 已足够.
+    GLib.idle_add(on_activate, None)
     try:
-        app.run([])
+        loop.run()
     finally:
         try:
             os.unlink(VIEWER_PID_PATH)
