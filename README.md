@@ -157,6 +157,14 @@ Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app
 
 ## Changelog
 
+### v1.9.7 (2026-07-12)
+- chore: each app binding is now stored as a single config row. Previously every (modifier, key) pair wrote its own 6-line block, so the three sibling modifiers of one app occupied 18 lines; with five apps the config grew to 91 lines. The new format joins all three modifiers into one modifiers field separated by "|" and keeps one 6-line block per (app, Fx), so five apps now take ~30 lines. On disk the format is unambiguous: "" means bare Fx; a single name means single modifier; pipe-separated names mean multiple modifiers. The in-memory model still carries one AppBinding per (modifiers, key) — load splits pipe-separated entries back into individual rows, serialize merges them back together, so --show-app / --bind-app / --unbind-app behavior is unchanged. Legacy files (one modifier per row) keep loading.
+- fix: merge duplicate rows and remove-one-row both used struct assignment to compact the AppBinding array, which left several rows sharing the same char* buffers. The subsequent app_binding_free then double-freed those buffers, and --unbind-app would collapse the file down to one row and lose every other binding. Both paths now deep-copy fields per row and clear the source row's pointers before free so the caller's free pass is a no-op on the cleared slots.
+
+### v1.9.6 (2026-07-11)
+- fix: --clean now also clears the viewer's auto-registered bindings (Pause / Scroll_Lock / Print) and trims empty-slot residue from the dconf custom-keybindings array. Previously --clean only wiped slot bindings, so the viewer rows stuck around and the dconf array still showed the empty slots they had occupied.
+- fix: --clean no longer touches --bind-app registrations. Those rows live in ~/.config/window-toggle/bindings.json under the name "window-toggle-app" and are removed by --unbind-app only. Without this split, --clean used to wipe user's app bindings along with the slot/viewer rows.
+
 ### v1.9.5 (2026-07-11)
 - feat: `--bind-app <Fx> <cmd> <wm_class>` now registers three dconf shortcuts — `Ctrl+Fx`, `Super+Fx`, and `Alt+Fx` — instead of just one. Any of the three modifiers toggles the same window, so the user no longer has to pick one and stick with it. Bindings with an explicit modifier (e.g. `Ctrl+Shift+F7`) still register as a single row, so existing scripts keep working.
 - feat: `--show-app` and the viewer popup now collapse the three siblings of one app into a single row. Modifier set is shown as `Ctrl(S+A)+Fx` (Ctrl + Super + Alt), `Ctrl+S+Fx` (Ctrl + Super only), or `Ctrl+Fx` (one entry), depending on which modifiers are present. Viewer badge state for the merged row is `started > hidden > not-started`, so a row never says "all dead" while one of the three siblings is alive.

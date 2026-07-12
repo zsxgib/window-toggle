@@ -220,15 +220,34 @@ def read_app_bindings():
             if not in_section:
                 continue
             if not line.strip():
+                # Blank line ends one block. If  carries multiple
+                # names joined by "|" the C side stores them on disk that way
+                # to keep one (app, Fx) = one block. Split that string back into
+                # individual modifier rows so downstream grouping sees them as
+                # three siblings (matching the in-memory C representation).
                 if cur.get("key") and cur.get("cmd"):
-                    out.append(cur)
+                    mods_value = cur.get("modifiers", "") or ""
+                    parts = mods_value.split("|") if mods_value else [""]
+                    if not parts:
+                        parts = [""]
+                    for mod in parts:
+                        row = dict(cur)
+                        row["modifiers"] = mod
+                        out.append(row)
                 cur = {}
                 continue
             if ":" in line:
                 k, _, v = line.partition(":")
                 cur[k.strip()] = v.strip()
     if cur.get("key") and cur.get("cmd"):
-        out.append(cur)
+        mods_value = cur.get("modifiers", "") or ""
+        parts = mods_value.split("|") if mods_value else [""]
+        if not parts:
+            parts = [""]
+        for mod in parts:
+            row = dict(cur)
+            row["modifiers"] = mod
+            out.append(row)
     return out
 
 

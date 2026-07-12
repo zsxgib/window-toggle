@@ -1165,10 +1165,25 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--run-app") == 0) {
             mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.9.6\n");
+            printf("window-toggle v1.9.7\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
+            printf("\n");
+            printf("v1.9.7 主要更新：\n");
+            printf("  - 配置文件里 app binding 改成一行一个 app：\n");
+            printf("    之前每个 (modifier, key) 一块, 三个 modifier 加一个 app\n");
+            printf("    要写三块 6 行, 看上去乱。现在把三个 modifier 拼到同一行的\n");
+            printf("    modifiers 字段里用 \"|\" 分隔, 一个 (app, Fx) 一块 6 行,\
+");
+            printf("    5 个 app 从原来 91 行压到 30 行。读的时候自动拆回 3 个\n");
+            printf("    AppBinding, --show-app / --bind-app / --unbind-app\n");
+            printf("    行为完全没变, 老格式文件 (一个 modifier 一行) 也能继续读。\n");
+            printf("  - 修了两个会丢数据的内部 bug：\n");
+            printf("    之前 merge 重复行 / 删除一行时只把结构体直接赋值, 多个\n");
+            printf("    AppBinding 共享同一个字符串指针, 释放时就二次释放。\n");
+            printf("    --unbind-app 一跑就把整个文件压成一行, 改不回来了。\n");
+            printf("    现在按字段逐个复制, 删除的行先清空再让 free(NULL)。\n");
             printf("\n");
             printf("v1.9.6 主要更新：\n");
             printf("  - --clean 也清掉 viewer 自动注册 (Pause / Scroll_Lock / Print)：\n");

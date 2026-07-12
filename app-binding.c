@@ -110,6 +110,11 @@ static long find_section_start(FILE *fp) {
     return -1;
 }
 
+/* Forward declarations for modifier-list encoding helpers (defined below). */
+static char *enc_modifiers_from_array(const char *const *mods, int n);
+static int split_modifiers(const char *s, char **outbuf, int max_out, int *out_count);
+static void merge_duplicate_rows(AppBinding *list, int *count_io);
+
 int app_binding_load(const char *config_path, AppBinding **out, int *count) {
     *out = NULL;
     *count = 0;
@@ -122,50 +127,81 @@ int app_binding_load(const char *config_path, AppBinding **out, int *count) {
     /* Re-read from section start, skip the delimiter line. */
     fseek(fp, start, SEEK_SET);
     char line[8192];
-    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; } /* skip delimiter */
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
 
     AppBinding *list = NULL;
     int cap = 0, n = 0;
-    AppBinding cur = {0};
+
+    /* Each block in the file starts with `modifiers:` which may carry
+     * several modifier names joined by '|'. When we read such a row we
+     * expand it into multiple AppBinding rows (one per modifier), and
+     * `block_start` records where this block begins so that subsequent
+     * `key/cmd/wm_class/target_window` lines only apply to rows in this
+     * block — not to every row we've read so far. */
+    int block_start = 0;
 
     while (fgets(line, sizeof(line), fp)) {
         rtrim(line);
         if (line[0] == '\0') {
-            if (cur.key) {
-                if (n == cap) {
-                    cap = cap ? cap * 2 : 4;
-                    list = realloc(list, cap * sizeof(AppBinding));
-                }
-                list[n++] = cur;
-                cur = (AppBinding){0};
-            }
+            /* Blank line ends the current block. Field writes after this
+             * (none, because we just consumed the separator) belong to
+             * the next block. block_start stays at n. */
+            block_start = n;
             continue;
         }
         char *v = NULL;
         if (parse_kv(line, "modifiers", &v)) {
-            free(cur.modifiers);
-            cur.modifiers = strdup(v);
+            char *pieces[8] = {0};
+            int np = 0;
+            if (split_modifiers(v, pieces, 8, &np) == 0 && np > 0) {
+                block_start = n;
+                for (int i = 0; i < np; i++) {
+                    if (n == cap) {
+                        cap = cap ? cap * 2 : 4;
+                        list = realloc(list, cap * sizeof(AppBinding));
+                    }
+                    list[n].modifiers = strdup(pieces[i]);
+                    list[n].key = NULL;
+                    list[n].cmd = NULL;
+                    list[n].wm_class = NULL;
+                    list[n].target_window = 0;
+                    n++;
+                }
+            } else {
+                /* `modifiers: ""` (bare Fx) is a single row. */
+                block_start = n;
+                if (n == cap) {
+                    cap = cap ? cap * 2 : 4;
+                    list = realloc(list, cap * sizeof(AppBinding));
+                }
+                list[n].modifiers = strdup("");
+                list[n].key = NULL;
+                list[n].cmd = NULL;
+                list[n].wm_class = NULL;
+                list[n].target_window = 0;
+                n++;
+            }
+            for (int i = 0; i < np; i++) free(pieces[i]);
         } else if (parse_kv(line, "key", &v)) {
-            free(cur.key);
-            cur.key = strdup(v);
+            for (int k = block_start; k < n; k++) {
+                free(list[k].key);
+                list[k].key = strdup(v);
+            }
         } else if (parse_kv(line, "cmd", &v)) {
-            free(cur.cmd);
-            cur.cmd = strdup(v);
+            for (int k = block_start; k < n; k++) {
+                free(list[k].cmd);
+                list[k].cmd = strdup(v);
+            }
         } else if (parse_kv(line, "wm_class", &v)) {
-            free(cur.wm_class);
-            cur.wm_class = strdup(v);
+            for (int k = block_start; k < n; k++) {
+                free(list[k].wm_class);
+                list[k].wm_class = strdup(v);
+            }
         } else if (parse_kv(line, "target_window", &v)) {
-            sscanf(v, "0x%lx", &cur.target_window);
+            unsigned long win = 0;
+            sscanf(v, "0x%lx", &win);
+            for (int k = block_start; k < n; k++) list[k].target_window = win;
         }
-    }
-    /* EOF inside last block */
-    if (cur.key) {
-        if (n == cap) {
-            cap = cap ? cap * 2 : 4;
-            list = realloc(list, cap * sizeof(AppBinding));
-        }
-        list[n++] = cur;
-        cur = (AppBinding){0};
     }
 
     fclose(fp);
@@ -173,6 +209,7 @@ int app_binding_load(const char *config_path, AppBinding **out, int *count) {
     *count = n;
     return n;
 }
+
 
 void app_binding_free(AppBinding *list, int count) {
     if (!list) return;
@@ -201,8 +238,163 @@ const AppBinding *app_binding_find(const AppBinding *list, int count,
     return NULL;
 }
 
-/* Serialize the full list back into a string (caller frees). */
-static char *serialize(const AppBinding *list, int count) {
+/* ----- Modifier-list encoding --------------------------------------------
+ *
+ * On disk we store multiple modifiers on a single record by joining them
+ * with the pipe character ("|") and ordering them alphanumerically. This
+ * lets a single record represent the trio (Ctrl+Super+Alt) without three
+ * near-identical blocks. The in-memory layout still uses one AppBinding
+ * per (modifiers, key) pair, so rest of the code is unchanged.
+ *
+ * Storage forms:
+ *   "Ctrl"           single modifier
+ *   "Ctrl+Super+Alt" "+" inside one entry -> rejected, we use pipes
+ *   "Ctrl|Super|Alt" three modifiers on one logical binding
+ *   ""               bare (no modifier) Fx
+ *
+ * Encoding sorts the modifiers so reordering after writes doesn't churn
+ * the file.
+ */
+
+static int sort_strs(char **strs, int n) {
+    /* simple insertion sort; modifier count is tiny (<= 5) */
+    for (int i = 1; i < n; i++) {
+        char *cur = strs[i];
+        int j = i - 1;
+        while (j >= 0 && strcmp(strs[j], cur) > 0) {
+            strs[j + 1] = strs[j];
+            j--;
+        }
+        strs[j + 1] = cur;
+    }
+    return 0;
+}
+
+/* Returns a freshly-malloc'd string like "Ctrl|Super|Alt". Caller frees. */
+static char *enc_modifiers_from_array(const char *const *mods, int n) {
+    /* copy + dedupe */
+    char *seen[8] = {0};
+    int kept = 0;
+    for (int i = 0; i < n; i++) {
+        const char *s = mods[i] ? mods[i] : "";
+        int dup = 0;
+        for (int k = 0; k < kept; k++) {
+            if (strcmp(seen[k], s) == 0) { dup = 1; break; }
+        }
+        if (!dup) seen[kept++] = strdup(s);
+    }
+    /* sort */
+    sort_strs(seen, kept);
+    /* join with "|" */
+    size_t total = 1;
+    for (int i = 0; i < kept; i++) total += strlen(seen[i]) + 1;
+    char *out = malloc(total);
+    out[0] = '\0';
+    for (int i = 0; i < kept; i++) {
+        if (i > 0) strcat(out, "|");
+        strcat(out, seen[i]);
+    }
+    for (int i = 0; i < kept; i++) free(seen[i]);
+    return out;
+}
+
+/* Split a stored modifiers field into N modifier strings. Caller passes
+ * an array of char* outbuf[8]; out_count receives the populated count.
+ * Returns 0 on success. */
+static int split_modifiers(const char *s, char **outbuf, int max_out, int *out_count) {
+    if (!s || max_out <= 0) { if (out_count) *out_count = 0; return 0; }
+    int n = 0;
+    char *dup = strdup(s);
+    if (!dup) return -1;
+    char *saveptr = NULL;
+    for (char *tok = strtok_r(dup, "|", &saveptr); tok != NULL;
+         tok = strtok_r(NULL, "|", &saveptr)) {
+        if (n >= max_out) break;
+        outbuf[n++] = strdup(tok);
+    }
+    free(dup);
+    if (out_count) *out_count = n;
+    return 0;
+}
+
+/* Try to merge three AppBinding rows that share (key, cmd, wm_class,
+ * target_window) into one by combining their modifiers into the first
+ * row and deleting the rest. Called by app_binding_save via serialize.
+ * Reorders the list in-place by moving merged rows down. */
+static void merge_duplicate_rows(AppBinding *list, int *count_io) {
+    int n = *count_io;
+    int w = 0;
+    for (int i = 0; i < n; i++) {
+        if (!list[i].key || !list[i].cmd) { w++; continue; }
+        int dup = -1;
+        for (int j = 0; j < w; j++) {
+            if (!list[j].key || !list[j].cmd) continue;
+            if (strcmp(list[i].key, list[j].key) == 0 &&
+                strcmp(list[i].cmd, list[j].cmd) == 0 &&
+                strcmp(list[i].wm_class, list[j].wm_class) == 0 &&
+                list[i].target_window == list[j].target_window) {
+                dup = j; break;
+            }
+        }
+        if (dup < 0) {
+            /* Keep this row as the merge anchor. Deep-copy fields (don't
+             * share char* with the trailing row, otherwise freeing the
+             * trailing row's slots after compaction would double-free). */
+            if (w != i) {
+                list[w].modifiers = list[i].modifiers ? strdup(list[i].modifiers) : NULL;
+                list[w].key       = list[i].key       ? strdup(list[i].key)       : NULL;
+                list[w].cmd       = list[i].cmd       ? strdup(list[i].cmd)       : NULL;
+                list[w].wm_class  = list[i].wm_class  ? strdup(list[i].wm_class)  : NULL;
+                list[w].target_window = list[i].target_window;
+            }
+            w++;
+        } else {
+            /* Merge i into dup: split both stored modifier strings into
+             * their individual names, then re-encode so duplicates are
+             * collapsed (and list[i]'s dangling strings are released so
+             * the trailing row's slots are safe to free). */
+            char *names[16] = {0};
+            int nn = 0;
+            char *mpieces[8] = {0}; int mn = 0;
+            if (split_modifiers(list[dup].modifiers ? list[dup].modifiers : "",
+                                mpieces, 8, &mn) == 0) {
+                for (int k = 0; k < mn && nn < 16; k++) names[nn++] = mpieces[k];
+            }
+            char *ipieces[8] = {0}; int in_ = 0;
+            if (split_modifiers(list[i].modifiers ? list[i].modifiers : "",
+                                ipieces, 8, &in_) == 0) {
+                for (int k = 0; k < in_ && nn < 16; k++) names[nn++] = ipieces[k];
+            }
+            char *combined = enc_modifiers_from_array(
+                (const char *const *)names, nn);
+            free(list[dup].modifiers);
+            list[dup].modifiers = combined;
+            /* Free any names slots that were not consumed (when nn hit cap). */
+            for (int k = 0; k < nn; k++) free(names[k]);
+            /* Release list[i]'s own fields now: after compaction the slot
+             * at index i will be freed by app_binding_free using the
+             * caller's original count; clearing the strings prevents
+             * double-free of strdup'd buffers. */
+            free(list[i].modifiers);
+            free(list[i].key);
+            free(list[i].cmd);
+            free(list[i].wm_class);
+            list[i].modifiers = NULL;
+            list[i].key       = NULL;
+            list[i].cmd       = NULL;
+            list[i].wm_class  = NULL;
+        }
+    }
+    *count_io = w;
+}
+
+/* Serialize the full list back into a string (caller frees).
+ *
+ * Rows that share (key, cmd, wm_class, target_window) are merged into a
+ * single record with their modifiers joined by '|', producing a compact
+ * representation (e.g. one row per app+Fx instead of three). */
+static char *serialize(AppBinding *list, int count) {
+    merge_duplicate_rows(list, &count);
     size_t cap = 4096;
     char *buf = malloc(cap);
     size_t len = 0;
@@ -375,7 +567,30 @@ int app_binding_remove(const char *config_path, const char *modifiers, const cha
     free(list[found].key);
     free(list[found].cmd);
     free(list[found].wm_class);
-    for (int j = found; j < count - 1; j++) list[j] = list[j+1];
+    /* Shift rows left; deep-copy each surviving row's strings so the slot
+     * at the old tail position does not share pointers with them (otherwise
+     * app_binding_free would double-free). */
+    for (int j = found; j < count - 1; j++) {
+        list[j].modifiers = list[j+1].modifiers ? strdup(list[j+1].modifiers) : NULL;
+        list[j].key       = list[j+1].key       ? strdup(list[j+1].key)       : NULL;
+        list[j].cmd       = list[j+1].cmd       ? strdup(list[j+1].cmd)       : NULL;
+        list[j].wm_class  = list[j+1].wm_class  ? strdup(list[j+1].wm_class)  : NULL;
+        list[j].target_window = list[j+1].target_window;
+        free(list[j+1].modifiers);
+        free(list[j+1].key);
+        free(list[j+1].cmd);
+        free(list[j+1].wm_class);
+        list[j+1].modifiers = NULL;
+        list[j+1].key       = NULL;
+        list[j+1].cmd       = NULL;
+        list[j+1].wm_class  = NULL;
+    }
+    /* Clear the freed tail row so app_binding_free(N) is a no-op there. */
+    list[count - 1].modifiers = NULL;
+    list[count - 1].key       = NULL;
+    list[count - 1].cmd       = NULL;
+    list[count - 1].wm_class  = NULL;
+    list[count - 1].target_window = 0;
     count--;
 
     char tmp_path[1024];

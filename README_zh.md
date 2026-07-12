@@ -156,6 +156,14 @@ window-toggle --unbind-app Ctrl+F12
 
 ## 更新日志
 
+### v1.9.7 (2026-07-12)
+- 改动：配置文件里每个 app binding 改成一行一存。之前每个 (modifier, key) 写一个 6 行 block, 一个 app 三个 modifier 占 18 行, 五个 app 一共 91 行。现在把三个 modifier 名拼到同一行的 modifiers 字段里, 用 "|" 分隔, 一个 (app, Fx) 一个 6 行 block, 五个 app 压到 30 行左右。文件格式明确: 空字符串 = 裸 Fx, 单个名字 = 一个 modifier, 名字 | 名字 | 名字 = 多个 modifier。内存里仍按老规矩一个 (modifiers, key) 一个 AppBinding —— load 时把 "|" 串拆回多行, serialize 时再合成一行, 所以 --show-app / --bind-app / --unbind-app 行为完全不变。旧格式 (一个 modifier 一行) 继续能读。
+- 修复: 合并重复行 / 删除某一行 时原来直接做结构体赋值, 几个 AppBinding 共用同一个 char* 指针, 后面 free 时二次释放, --unbind-app 一跑就把整个文件压成一行, 改不回来了。现在按字段逐个复制, 被吞掉的行的指针先清空再让 free(NULL), 调用方释放时是空操作。
+
+### v1.9.6 (2026-07-11)
+- 修复: --clean 现在也清 viewer 自动注册的快捷键 (Pause / Scroll_Lock / Print) 和 dconf 数组里残留的空 slot 路径。之前 --clean 只清 slot binding, viewer 那几条粘在上面像没清干净, dconf 数组也留着空 slot 占位。
+- 修复: --clean 不再动 --bind-app 注册的快捷键。那些行落在 ~/.config/window-toggle/bindings.json, 名字是 "window-toggle-app", 由 --unbind-app 单独清, 不归 --clean 管。之前 --clean 顺带把 app binding 一起清了, 用户得重新注册。
+
 ### v1.9.5 (2026-07-11)
 - 改动：`--bind-app <Fx> <cmd> <wm_class>` 现在一次注册三条 dconf 快捷键 —— `Ctrl+Fx`、`Super+Fx`、`Alt+Fx`，不再只是一条。按这三条里任意一条都 toggle 同一个窗口，不用在创建时指定修饰符。
 - 改动：带显式修饰符的（像 `Ctrl+Shift+F7`）还是只注册一条，老脚本不受影响。
