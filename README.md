@@ -89,7 +89,7 @@ Press `Ctrl+Alt+F1` anywhere in GNOME:
 | `--configure` | Add a new shortcut for a window |
 | `--run` | Toggle window (used by GNOME shortcut) |
 | `--show` | List all configured shortcuts |
-| `--clean` | Remove every window-toggle shortcut (slot, app binding, viewer) |
+| `--clean` | Remove slot and viewer shortcuts (leaves `--bind-app` registrations intact) |
 | `--start` | Clean and start fresh |
 | `--stop` | Stop the daemon |
 | `--status` | Show whether the daemon is running |
@@ -153,7 +153,7 @@ Behavior on press:
 - If the anchored window is gone — `fork+execlp <cmd>`, poll for a window matching `WM_CLASS`, anchor the first match, and stop. The newly-launched window is visible by default, so it is not toggled.
 - Multi-instance: opening a second instance of the same class does **not** drift the binding; the anchor stays on the originally launched window.
 
-Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app_bindings ###`. The slot pipeline stops at this delimiter, so app bindings and slot bindings do not interfere. `--clean` now also removes `--bind-app` bindings and the auto-registered viewer bindings. The `bindings.json` file is kept on disk but its `### app_bindings ###` section is emptied; the slot section is removed as before.
+Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app_bindings ###`. The slot pipeline stops at this delimiter, so app bindings and slot bindings do not interfere. `--clean` also removes the auto-registered viewer bindings (Pause / Scroll_Lock / Print) and any empty-slot residue in the dconf custom-keybindings array. It does NOT touch `--bind-app` registrations; use `--unbind-app` for those.
 
 ## Changelog
 
@@ -170,7 +170,7 @@ Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app
 - fix: viewer popup now distinguishes "visible" from "minimized/hidden" from "gone". Previously both hidden and gone windows were rendered the same way, so pressing Ctrl+Fx to minimize a window looked like the key had no effect.
   - Three states: `started` (green dot, full opacity), `hidden` (gray dot, 40% opacity), `not-started` (orange dot, 25% opacity).
   - The popup polls every second while open, so closing/minimizing a window via Ctrl+Fx updates the popup in place — no need to close and reopen it.
-- fix: `--clean` now wipes every `window-toggle*` shortcut: slot bindings, `--bind-app` bindings, and the auto-registered viewer bindings (Pause / Scroll_Lock / Print). Empty-slot residue in the dconf custom-keybindings array is also trimmed. The `bindings.json` file is kept; its `### app_bindings ###` section is left empty so a subsequent `--bind-app` is the only way to repopulate it.
+- fix: `--clean` now also wipes the auto-registered viewer bindings (Pause / Scroll_Lock / Print) and any empty-slot residue in the dconf array. `--bind-app` registrations are intentionally left alone — use `--unbind-app` to remove one.
 
 ### v1.9.1 (2026-07-03)
 - fix: dconf action parameter order (`--key X --run-app` instead of `--run-app --key X`) so the dconf callback actually fires
@@ -182,7 +182,7 @@ Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app
 - New: `--unbind-app <key>`, `--show-app`, `--run-app` (dconf callback)
 - Anchor semantics: first launched window is remembered, never drifts
 - Config: app bindings stored in a `### app_bindings ###` section, isolated from slot data
-- `--clean` wipes the app section as well; use `--unbind-app <Ctrl+Fx>` to remove a single app binding without touching everything else
+- `--clean` leaves app registrations alone; use `--unbind-app <Ctrl+Fx>` to remove a single one without touching the rest
 - Silent XErrorHandler added around stale-anchor checks
 
 ### v1.8 (2026-06-02)
