@@ -156,6 +156,9 @@ window-toggle --unbind-app Ctrl+F12
 
 ## 更新日志
 
+### v1.9.8 (2026-07-13)
+- 修复：`--clean` 现在只删除由 `--configure` 创建的普通窗口快捷键。app 快捷键（`window-toggle-app`）和 viewer 快捷键（`window-toggle-viewer`）都会保留，正在运行的 viewer 也不会被关闭。
+
 ### v1.9.7 (2026-07-12)
 - 改动：配置文件里每个 app binding 改成一行一存。之前每个 (modifier, key) 写一个 6 行 block, 一个 app 三个 modifier 占 18 行, 五个 app 一共 91 行。现在把三个 modifier 名拼到同一行的 modifiers 字段里, 用 "|" 分隔, 一个 (app, Fx) 一个 6 行 block, 五个 app 压到 30 行左右。文件格式明确: 空字符串 = 裸 Fx, 单个名字 = 一个 modifier, 名字 | 名字 | 名字 = 多个 modifier。内存里仍按老规矩一个 (modifiers, key) 一个 AppBinding —— load 时把 "|" 串拆回多行, serialize 时再合成一行, 所以 --show-app / --bind-app / --unbind-app 行为完全不变。旧格式 (一个 modifier 一行) 继续能读。
 - 修复: 合并重复行 / 删除某一行 时原来直接做结构体赋值, 几个 AppBinding 共用同一个 char* 指针, 后面 free 时二次释放, --unbind-app 一跑就把整个文件压成一行, 改不回来了。现在按字段逐个复制, 被吞掉的行的指针先清空再让 free(NULL), 调用方释放时是空操作。

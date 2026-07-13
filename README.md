@@ -157,6 +157,9 @@ Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app
 
 ## Changelog
 
+### v1.9.8 (2026-07-13)
+- fix: `--clean` now removes only ordinary window shortcuts created by `--configure`. App shortcuts (`window-toggle-app`) and viewer shortcuts (`window-toggle-viewer`) remain registered, and the running viewer is left untouched.
+
 ### v1.9.7 (2026-07-12)
 - chore: each app binding is now stored as a single config row. Previously every (modifier, key) pair wrote its own 6-line block, so the three sibling modifiers of one app occupied 18 lines; with five apps the config grew to 91 lines. The new format joins all three modifiers into one modifiers field separated by "|" and keeps one 6-line block per (app, Fx), so five apps now take ~30 lines. On disk the format is unambiguous: "" means bare Fx; a single name means single modifier; pipe-separated names mean multiple modifiers. The in-memory model still carries one AppBinding per (modifiers, key) — load splits pipe-separated entries back into individual rows, serialize merges them back together, so --show-app / --bind-app / --unbind-app behavior is unchanged. Legacy files (one modifier per row) keep loading.
 - fix: merge duplicate rows and remove-one-row both used struct assignment to compact the AppBinding array, which left several rows sharing the same char* buffers. The subsequent app_binding_free then double-freed those buffers, and --unbind-app would collapse the file down to one row and lose every other binding. Both paths now deep-copy fields per row and clear the source row's pointers before free so the caller's free pass is a no-op on the cleared slots.

@@ -1165,10 +1165,15 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--run-app") == 0) {
             mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.9.7\n");
+            printf("window-toggle v1.9.8\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
+            printf("\n");
+            printf("v1.9.8 主要更新：\n");
+            printf("  - --clean 现在只清理由 --configure 创建的普通窗口快捷键。\n");
+            printf("    window-toggle-app 和 window-toggle-viewer 都会保留，\n");
+            printf("    正在运行的 viewer 也不会被关闭。\n");
             printf("\n");
             printf("v1.9.7 主要更新：\n");
             printf("  - 配置文件里 app binding 改成一行一个 app：\n");
@@ -1308,27 +1313,11 @@ int main(int argc, char *argv[]) {
 void clean_mode_with_path(const char *config_path) {
     fprintf(stderr, COLOR_BOLD COLOR_CYAN "=== Window Toggle Clean Mode ===" COLOR_RESET "\n");
 
-    /* --clean 顺带关掉 viewer 弹窗进程（用 SIGTERM 让它优雅退出，
-     * 否则 --clean 之后 viewer 还会读到一个"已经清掉"的配置文件，
-     * 显示空弹窗或干脆死循环找文件）。 */
-    {
-        FILE *vfp = fopen("/tmp/window-toggle-viewer.pid", "r");
-        if (vfp) {
-            long vpid = 0;
-            if (fscanf(vfp, "%ld", &vpid) == 1 && vpid > 0) {
-                if (kill((pid_t)vpid, SIGTERM) == 0) {
-                    fprintf(stderr, COLOR_GREEN "✓ Stopped viewer daemon (pid %ld)" COLOR_RESET "\n", vpid);
-                }
-            }
-            fclose(vfp);
-            unlink("/tmp/window-toggle-viewer.pid");
-        }
-    }
-
-    /* Clean up window-toggle related shortcuts by name matching */
-    fprintf(stderr, COLOR_YELLOW "Cleaning window-toggle shortcuts (by name matching)..." COLOR_RESET "\n");
+    /* --clean only removes shortcuts created by --configure.
+     * App bindings and viewer bindings are managed separately and stay active. */
+    fprintf(stderr, COLOR_YELLOW "Cleaning configured window shortcuts only..." COLOR_RESET "\n");
     int cleaned_count = 0;
-    int cleaned_slot = 0, cleaned_viewer = 0;
+    int cleaned_slot = 0;
 
     for (int i = 0; i < 100; i++) {
         /* Read name field */
@@ -1350,17 +1339,8 @@ void clean_mode_with_path(const char *config_path) {
                     name_stripped[--len] = '\0';
                 }
 
-                /* 清掉两类仍归 --clean 管的快捷键:
-                 *   - "window-toggle"          slot 系 (--configure 注册)
-                 *   - "window-toggle-viewer"   viewer 自动注册
-                 * 注：app 系 ("window-toggle-app") 不归 --clean, 那是用户
-                 * 配的 --bind-app 数据, 单独走 --unbind-app 删。--clean 不
-                 * 动 --bind-app 注册的快捷键和 ~/.config/window-toggle/
-                 * bindings.json. */
-                const char *name_kind = NULL;
-                if (strcmp(name_stripped, "window-toggle") == 0)            name_kind = "slot";
-                else if (strcmp(name_stripped, "window-toggle-viewer") == 0) name_kind = "viewer";
-                if (name_kind) {
+                /* Only shortcuts created by --configure belong to --clean. */
+                if (strcmp(name_stripped, "window-toggle") == 0) {
                     /* Build the path to remove from list */
                     char remove_path[256];
                     snprintf(remove_path, sizeof(remove_path), "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom%d/", i);
@@ -1394,9 +1374,8 @@ void clean_mode_with_path(const char *config_path) {
                     }
 
                     if (result == 0) {
-                        if (!strcmp(name_kind, "slot"))   cleaned_slot++;
-                        else if (!strcmp(name_kind, "viewer"))  cleaned_viewer++;
-                        fprintf(stderr, COLOR_GREEN "  ✓ Cleaned custom%d [%s]: %s" COLOR_RESET "\n", i, name_kind, name_stripped);
+                        cleaned_slot++;
+                        fprintf(stderr, COLOR_GREEN "  ✓ Cleaned custom%d: %s" COLOR_RESET "\n", i, name_stripped);
                         cleaned_count++;
                     }
                 }
@@ -1410,8 +1389,8 @@ void clean_mode_with_path(const char *config_path) {
         fprintf(stderr, COLOR_YELLOW "No window-toggle shortcuts found." COLOR_RESET "\n");
     } else {
         fprintf(stderr, COLOR_GREEN "\n✓ Cleaned %d window-toggle shortcut(s)" COLOR_RESET "\n", cleaned_count);
-        fprintf(stderr, COLOR_CYAN "  slot=%d  viewer=%d" COLOR_RESET "\n",
-                cleaned_slot, cleaned_viewer);
+        fprintf(stderr, COLOR_CYAN "  configured shortcuts=%d" COLOR_RESET "\n",
+                cleaned_slot);
     }
 
     /* --clean 不动 ~/.config/window-toggle/bindings.json: 那份配置
@@ -1474,7 +1453,6 @@ void clean_mode_with_path(const char *config_path) {
     fprintf(stderr, COLOR_YELLOW "Cleaning up temporary files..." COLOR_RESET "\n");
     unlink("/tmp/window-toggle-state");
     unlink("/tmp/window-toggle-active");
-    unlink("/tmp/window-toggle-viewer.pid");
     fprintf(stderr, COLOR_GREEN "✓ Clean complete!" COLOR_RESET "\n");
 }
 
