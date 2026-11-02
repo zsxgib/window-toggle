@@ -615,6 +615,16 @@ void configure_mode_with_path(const char *config_path) {
     /* Update configuration file with slot_id (append mode) */
     save_shortcut_mapping(config_path, shortcut_str, selected, title, class, next_id);
     fprintf(stderr, COLOR_CYAN "Configuration updated with slot ID:" COLOR_RESET " %d\n", next_id);
+    /* Notify the external badge tool about the new binding so it can show a
+     * status label for this window. The tool is optional: it runs detached in
+     * the background and any failure is ignored, so a missing or broken
+     * badge tool can never break shortcut configuration. */
+    {
+        char cb_cmd[512];
+        snprintf(cb_cmd, sizeof(cb_cmd),
+                 "cb '%s' 0x%lx >/dev/null 2>&1 &", shortcut_str, selected);
+        system(cb_cmd);
+    }
 configuration_complete:
     /* Cleanup */
     if (config.modifiers[0]) free(config.modifiers[0]);
@@ -1165,10 +1175,16 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--run-app") == 0) {
             mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.9.8\n");
+            printf("window-toggle v1.9.9\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
+            printf("\n");
+            printf("v1.9.9 主要更新：\n");
+            printf("  - 绑定成功后通知外部徽章工具 (corner-badge)：\n");
+            printf("    window-toggle 会在后台调用 `cb <shortcut> <window-id>`,\n");
+            printf("    由它去屏幕上显示这个窗口的状态标签。工具没装或调用失败\n");
+            printf("    都不会影响快捷键本身的配置。\n");
             printf("\n");
             printf("v1.9.8 主要更新：\n");
             printf("  - --clean 现在只清理由 --configure 创建的普通窗口快捷键。\n");
