@@ -157,6 +157,9 @@ Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app
 
 ## Changelog
 
+### v1.9.10 (2026-11-02)
+- feat: after the daemon starts, window-toggle notifies the badge tool with `wt-badge-cb --all`, so every already-configured shortcut gets registered and its status label appears in the top-right corner right away. The call is detached and its failures are ignored.
+
 ### v1.9.9 (2026-11-02)
 - feat: after a shortcut is configured, window-toggle notifies an external badge tool (`corner-badge`) by running `wt-badge-cb <shortcut> <window-id>` in the background. The tool resolves the window to the pi sessions inside it and shows a status label on screen. The call is detached and its failures are ignored, so a missing or broken badge tool never breaks shortcut configuration.
 

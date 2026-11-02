@@ -799,6 +799,10 @@ void start_mode_with_path(const char *config_path) {
     int ret = daemon_start();
     if (ret == 0) {
         fprintf(stderr, COLOR_GREEN "✓ Daemon started successfully" COLOR_RESET "\n");
+        /* Let the badge tool register every existing shortcut and show its
+         * labels right away, so a wt startup is enough for them to appear.
+         * Detached and failures are ignored: the badge tool is optional. */
+        system("wt-badge-cb --all >/dev/null 2>&1 &");
     } else if (ret < 0) {
         fprintf(stderr, COLOR_RED "✗ Failed to start daemon" COLOR_RESET "\n");
     }
@@ -1175,10 +1179,16 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--run-app") == 0) {
             mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.9.9\n");
+            printf("window-toggle v1.9.10\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
+            printf("\n");
+            printf("v1.9.10 主要更新：\n");
+            printf("  - 启动守护进程后自动通知徽章工具显示标签：\n");
+            printf("    window-toggle --start 成功后会在后台调用\n");
+            printf("    `wt-badge-cb --all`, 把已有快捷键全部登记一遍并把标签\n");
+            printf("    显示到屏幕右上角。调用异步且忽略失败。\n");
             printf("\n");
             printf("v1.9.9 主要更新：\n");
             printf("  - 绑定成功后通知外部徽章工具 (corner-badge)：\n");
