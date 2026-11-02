@@ -157,7 +157,7 @@ window-toggle --unbind-app Ctrl+F12
 ## 更新日志
 
 ### v1.9.9 (2026-11-02)
-- 新增：绑定成功后，window-toggle 会在后台调用 `cb <shortcut> <window-id>` 通知外部徽章工具（corner-badge）。该工具会把窗口解析到里面的 pi 会话，并在屏幕上显示一个状态标签。调用是异步的且忽略失败，所以徽章工具缺失或出错都不会影响快捷键配置本身。
+- 新增：绑定成功后，window-toggle 会在后台调用 `wt-badge-cb <shortcut> <window-id>` 通知外部徽章工具（corner-badge）。该工具会把窗口解析到里面的 pi 会话，并在屏幕上显示一个状态标签。调用是异步的且忽略失败，所以徽章工具缺失或出错都不会影响快捷键配置本身。
 
 ### v1.9.8 (2026-07-13)
 - 修复：`--clean` 现在只删除由 `--configure` 创建的普通窗口快捷键。app 快捷键（`window-toggle-app`）和 viewer 快捷键（`window-toggle-viewer`）都会保留，正在运行的 viewer 也不会被关闭。

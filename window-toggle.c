@@ -622,7 +622,7 @@ void configure_mode_with_path(const char *config_path) {
     {
         char cb_cmd[512];
         snprintf(cb_cmd, sizeof(cb_cmd),
-                 "cb '%s' 0x%lx >/dev/null 2>&1 &", shortcut_str, selected);
+                 "wt-badge-cb '%s' 0x%lx >/dev/null 2>&1 &", shortcut_str, selected);
         system(cb_cmd);
     }
 configuration_complete:
@@ -1182,7 +1182,7 @@ int main(int argc, char *argv[]) {
             printf("\n");
             printf("v1.9.9 主要更新：\n");
             printf("  - 绑定成功后通知外部徽章工具 (corner-badge)：\n");
-            printf("    window-toggle 会在后台调用 `cb <shortcut> <window-id>`,\n");
+            printf("    window-toggle 会在后台调用 `wt-badge-cb <shortcut> <window-id>`,\n");
             printf("    由它去屏幕上显示这个窗口的状态标签。工具没装或调用失败\n");
             printf("    都不会影响快捷键本身的配置。\n");
             printf("\n");
