@@ -157,6 +157,10 @@ Storage: the same `/tmp/window-toggle-config.json`, in a section marked `### app
 
 ## Changelog
 
+### v1.9.11 (2026-11-03)
+- fix: the badge callback is no longer launched through a shell. It now uses `fork` + `setsid` + `execvp`, so the command is looked up in `PATH` and the callback is not killed when the launching shell exits (the same problem occurred with `cmd /c` on Windows).
+- chore: the callback is now the `wt-badge-cb` command provided by the pip-installed `corner-badge` package, instead of a hand-placed script.
+
 ### v1.9.10 (2026-11-02)
 - feat: after the daemon starts, window-toggle notifies the badge tool with `wt-badge-cb --all`, so every already-configured shortcut gets registered and its status label appears in the top-right corner right away. The call is detached and its failures are ignored.
 

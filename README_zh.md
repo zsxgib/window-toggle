@@ -156,6 +156,10 @@ window-toggle --unbind-app Ctrl+F12
 
 ## 更新日志
 
+### v1.9.11 (2026-11-03)
+- 修复：调用徽章回调不再经过 shell。改为 `fork` + `setsid` + `execvp`，命令在 PATH 里查找。之前用 `system()` 会 fork 一个 sh，sh 退出时依附其上的回调进程可能被连带终止（Windows 上 `cmd /c` 有同样问题）。
+- 改动：回调改用 pip 安装的 corner-badge 包提供的 `wt-badge-cb` 命令，不再依赖手工放置的脚本。
+
 ### v1.9.10 (2026-11-02)
 - 新增：守护进程启动后自动通知徽章工具显示标签。window-toggle --start 成功后会在后台调用 `wt-badge-cb --all`，把已有快捷键全部登记一遍，标签直接显示到屏幕右上角。调用是异步的且忽略失败。
 

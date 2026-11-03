@@ -58,6 +58,31 @@ int find_next_slot_id(const char *config_path);
 /* Get the executable path dynamically */
 static int silent_xerror_handler(Display *dpy, XErrorEvent *e) { (void)dpy; (void)e; return 0; }
 
+/* Run a command detached from this process' session and process group.
+ *
+ * Used to notify the optional corner-badge tool. The tool has to survive
+ * this process exiting, and its failure must never affect the main flow.
+ *
+ * fork + setsid + execvp (no shell involved), so:
+ *   - the command is looked up in PATH
+ *   - it is in its own session, so it is not killed when this process
+ *     group goes away (the same problem we hit with cmd /c on Windows) */
+static void run_detached(char *const argv[]) {
+    pid_t pid = fork();
+    if (pid < 0) return;
+    if (pid > 0) {
+        /* Do not wait: the callback can take a while (it resolves every
+         * binding), and blocking here would stall window-toggle itself.
+         * Reap it opportunistically so it does not linger as a zombie. */
+        int status;
+        waitpid(pid, &status, WNOHANG);
+        return;
+    }
+    setsid();
+    execvp(argv[0], argv);
+    _exit(127);
+}
+
 static void get_exec_path(char *buf, size_t bufsize) {
     ssize_t len = readlink("/proc/self/exe", buf, bufsize - 1);
     if (len != -1) {
@@ -620,10 +645,9 @@ void configure_mode_with_path(const char *config_path) {
      * the background and any failure is ignored, so a missing or broken
      * badge tool can never break shortcut configuration. */
     {
-        char cb_cmd[512];
-        snprintf(cb_cmd, sizeof(cb_cmd),
-                 "wt-badge-cb '%s' 0x%lx >/dev/null 2>&1 &", shortcut_str, selected);
-        system(cb_cmd);
+        char xid_str[32];
+        snprintf(xid_str, sizeof(xid_str), "0x%lx", selected);
+        run_detached((char *const[]){"wt-badge-cb", shortcut_str, xid_str, NULL});
     }
 configuration_complete:
     /* Cleanup */
@@ -802,7 +826,7 @@ void start_mode_with_path(const char *config_path) {
         /* Let the badge tool register every existing shortcut and show its
          * labels right away, so a wt startup is enough for them to appear.
          * Detached and failures are ignored: the badge tool is optional. */
-        system("wt-badge-cb --all >/dev/null 2>&1 &");
+        run_detached((char *const[]){"wt-badge-cb", "--all", NULL});
     } else if (ret < 0) {
         fprintf(stderr, COLOR_RED "✗ Failed to start daemon" COLOR_RESET "\n");
     }
@@ -1179,10 +1203,18 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--run-app") == 0) {
             mode = "run_app";
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("window-toggle v1.9.10\n");
+            printf("window-toggle v1.9.11\n");
             printf("\n");
             printf("GNOME 下的窗口切换工具：为任意窗口绑定一个快捷键，按一下显示，\n");
             printf("再按一下最小化。类似 macOS 的「隐藏应用」，但针对单个窗口。\n");
+            printf("\n");
+            printf("v1.9.11 主要更新：\n");
+            printf("  - 回调调用不再经过 shell：\n");
+            printf("    改为 fork + setsid + execvp，命令在 PATH 里查找。\n");
+            printf("    之前用 system() 会 fork 一个 sh，sh 退出时依附其上的\n");
+            printf("    回调进程可能被连带终止（Windows 上 cmd /c 也有同样问题）。\n");
+            printf("  - 回调改用 pip 安装的 corner-badge 包提供的 wt-badge-cb 命令，\n");
+            printf("    不再依赖手工放置的脚本。\n");
             printf("\n");
             printf("v1.9.10 主要更新：\n");
             printf("  - 启动守护进程后自动通知徽章工具显示标签：\n");
